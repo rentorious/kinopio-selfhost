@@ -1,6 +1,6 @@
 # kinopio-selfhost: build spec
 
-A self-hosted backend for the open-source Kinopio web client, for personal, noncommercial use on a home server. Single user first; sharing is an optional last milestone.
+A self-hosted backend for the open-source Kinopio web client, for personal, noncommercial use, deployed on Railway. Single user first; sharing is an optional last milestone.
 
 Companion docs:
 
@@ -24,24 +24,27 @@ Everything here was read out of kinopio-client `0394e07` (2026-10-09). The real 
 | Decision | Choice | Why |
 |---|---|---|
 | Database | **Postgres**, one row per item with a JSONB `data` column | The client writes small per-item patches. A row per item makes each patch one `UPDATE … SET data = data \|\| $1`. Ownership and permission checks are relational. JSONB means no migrations for the ~50 card fields. See §5. |
-| Topology | **Single origin**: site at `/`, API at `/api`, websocket at `/api/ws`, files at `/files` | No CORS for the browser, one TLS cert. Hosts are build-time env vars (CLIENT.md). |
+| Hosting | **Railway**: one service built from this repo's Dockerfile, plus a Railway Postgres and a Railway Storage Bucket | Managed TLS, websockets, backups; no home-server networking. |
+| Topology | **Single origin**: the NestJS service serves the client at `/`, the API at `/api`, the websocket at `/api/ws`, files at `/files` | No CORS, and the client is patched to derive its hosts from `window.location`, so one build works on any domain (CLIENT.md). |
+| Server stack | **NestJS** (Express adapter) on Node 22, **Kysely** + `pg` for queries, plain SQL migrations run on boot | Kysely keeps the JSONB merges and upserts as readable SQL, which an ORM would fight. |
 | Auth | Random 32-byte `apiKey` per user, passwords hashed with argon2id | The client sends the raw key in `Authorization` and treats "has apiKey" as signed in. |
 | Upgrade status | Return `stripePlanIsPurchased: true` on every user | The client derives `isUpgraded` from four billing fields and ignores any `isUpgraded` we send. This lifts the 100-card limit and the 5 MB upload limit. |
-| File storage | MinIO (S3 API) with presigned POST | Matches what the client already does (`{url, fields}` form upload). |
-| Server stack | **Open: NestJS or Rust (axum + sqlx)** | The spec is stack-neutral. Pick before M0. |
+| File storage | Railway Bucket (private, S3 API). Uploads go through **our own** signed form endpoint; files are streamed back through `/files/*` | Railway buckets have no public URLs and no documented POST-policy support, so the browser can't talk to the bucket directly. See §7. |
 
 ## 3. Architecture
 
 ```
- browser ── https://kino.<host>/ ──► Caddy ─┬─ /            static patched client (try_files … /app.html)
-                                            ├─ /api/*       server: REST + POST /operations
-                                            ├─ /api/ws      server: websocket relay
-                                            └─ /files/*     MinIO bucket (public read)
- server ──► Postgres
- server ──► MinIO (signs POST policies; browser uploads straight to /files via a presigned form)
+ browser ── https://<app>.up.railway.app ──► NestJS service ─┬─ /            patched client (static, falls back to app.html)
+                                                             ├─ /api/*       REST + POST /operations
+                                                             ├─ /api/ws      websocket relay
+                                                             └─ /files/*     streams objects from the bucket
+ NestJS ──► Railway Postgres   (DATABASE_URL, private network)
+ NestJS ──► Railway Bucket     (BUCKET, ACCESS_KEY_ID, SECRET_ACCESS_KEY, REGION, ENDPOINT)
 ```
 
-Docker Compose services: `caddy`, `server`, `postgres`, `minio`. Reach it over LAN or Tailscale; it needs HTTPS either way (Caddy internal CA, or Tailscale certs).
+Railway setup is in `docs/DEPLOY.md`. For local development, `docker-compose.yml` runs Postgres, and `FILES_DRIVER=local` stores uploads on disk instead of a bucket.
+
+**This is now on the public internet**, not a LAN, so: sign-up is closed once a user exists, sign-in is rate limited, the link-preview fetcher blocks private and Railway-internal addresses (including IPv6 `fd00::/8`, which Railway's private network uses), and the websocket relay enforces its allowlist.
 
 ## 4. Rules for every endpoint
 
@@ -194,18 +197,23 @@ Also bump `spaces.updated_at` for every space an op touched.
 
 ## 7. Uploads (M2)
 
+The client asks for a "presigned post" and then POSTs a multipart form (`fields` + `file`) to the returned `url`, with no auth headers, tracking progress via XHR. We control both halves, so the "presign" is our own signed token and the form goes to our own endpoint, which streams the file into the bucket. Same origin, no bucket CORS, and it works the same with the local-disk driver.
+
 `POST /upload/presigned-post`, body `{key, type, requestSpaceId}`:
 
 1. Require a signed-in user who can edit `requestSpaceId`.
 2. Validate `key` is `<id>/<filename>`: the id is a nanoid (`[A-Za-z0-9_-]`) and the filename only has `[A-Za-z0-9.-]`. The client keeps case (`Screenshot-2026.PNG`).
-3. Create an S3 POST policy for bucket `kinopio`: exact `key`, `Content-Type` starts-with `type`, `content-length-range` 0 to `UPLOAD_MAX_BYTES` (default 256 MB). The client only enforces size and type locally.
-4. Return `{ "url": "https://kino.<host>/files", "fields": { … } }`. **`fields` must contain a form value for every policy condition, including `key` and `Content-Type`.** The client posts exactly `fields` plus `file`; some SDKs add a condition without the matching field, and then every upload 403s while the client reports success.
+3. Return `{ "url": "<origin>/api/upload/direct", "fields": { "key": "<key>", "token": "<signed token>" } }`. The token is an HMAC (key `UPLOAD_SIGNING_SECRET`) over `{key, type, userId, maxBytes, exp}`, expiring after 1 hour.
 
-The browser POSTs the form straight to `url` with no auth headers. The client then assumes the file lives at `${cdnHost}/${key}`, so Caddy must map `/files/<key>` to the bucket object. The client marks an upload done when progress hits 100%, without checking the response status, so make bad requests fail at the policy step, not after the upload.
+`POST /api/upload/direct` (ours, not in the client's API list): multipart form with `key`, `token`, then `file`. Verify the token and that `key` matches, stream the file to storage with `Content-Type: type`, abort past `UPLOAD_MAX_BYTES` (default 256 MB), return `200 {}`. The client marks an upload done at 100% progress without checking the status, so reject early (bad token → close before reading the body).
 
 `POST /upload/presigned-post/multiple`, body `{files:[{key, type, size}], requestSpaceId}` → array of `{url, fields}` in the same order.
 
-Bucket policy: anonymous read on `kinopio/*` (Caddy is the only way in). Anyone who can reach the host and knows a file URL can read it, which is the same model as Kinopio's own CDN.
+`GET /files/<key>`: stream the object from storage with its content type and `Cache-Control: public, max-age=31536000, immutable` (keys are never reused for different content). Support `Range` requests so videos can seek. The client builds file URLs itself as `${cdnHost}/${key}`, and our patched `cdnHost` is `<origin>/files`.
+
+Anyone who knows a file URL can read it, which is the same model as Kinopio's own CDN. Keys include the card or space id, so they aren't guessable.
+
+Bandwidth note: streaming through the service counts as Railway service egress (bucket-to-service traffic is free). For personal use that's negligible; if it ever matters, `/files/*` can 302 to a short-lived presigned GET instead.
 
 ## 8. Link previews (M2)
 
@@ -227,10 +235,10 @@ See WEBSOCKET.md. It's a room-based relay with auth at join time and a strict al
 Each milestone ends with a manual run of the patched client against the server.
 
 **M0: skeleton**
-- Repo layout, Docker Compose (`caddy`, `server`, `postgres`, `minio`), migrations, config via env.
-- Client build stage with Patch 1 (CLIENT.md), served by Caddy.
-- `GET /api/` returns `{"status":"ok"}`; every other path returns the JSON 404.
-- *Done when:* the client loads at `https://kino.<host>` and works offline-style (local only).
+- NestJS app, config via env, SQL migrations run on boot, `docker-compose.yml` with Postgres for local dev.
+- Dockerfile: build the patched client (CLIENT.md), build the server, serve both from one image. `railway.json` with a health check.
+- `GET /api/` returns `{"status":"ok"}`; every other `/api` path returns the JSON 404; everything else serves the client.
+- *Done when:* the client loads at the Railway URL and works offline-style (local only).
 
 **M1: single-user core**
 - `create-user` CLI (creates the user's Inbox), sign-in, gated sign-up, `GET /user`.
@@ -245,7 +253,7 @@ Each milestone ends with a manual run of the patched client against the server.
 
 **M3: quality of life**
 - `POST /card/search` (trigram index), `GET /user/tags`, `GET /card/by-tag-name/:name`, todos, date mentions, hidden spaces.
-- `GET /space/download-all` (zip of one JSON per space), plus a nightly `pg_dump` and MinIO mirror outside the containers.
+- `GET /space/download-all` (zip of one JSON per space). Railway Postgres backups cover the database; add a periodic copy of the bucket somewhere outside Railway.
 - Other-space checkbox toggles (`PATCH /card/multiple`, `PATCH /box`), `PATCH /card/update-counter`, `POST /item/multiple`, public user endpoints, password and email change.
 - Client Patch 2 (own-domain space links).
 
@@ -261,7 +269,7 @@ Each milestone ends with a manual run of the patched client against the server.
 
 ## 12. Open questions
 
-1. **Server stack:** NestJS (familiar, same language as the client, quickest to write) or Rust with axum + sqlx (single small binary, lower memory on the home server)?
-2. **How devices reach it:** LAN only, or Tailscale? That decides the hostname and how TLS is done.
-3. **Postgres vs SQLite:** Postgres is the spec's default. If this stays single-user forever, SQLite with the same schema (JSON1 instead of JSONB) would mean one less container.
-4. **Sharing:** is M4 ever wanted? If not, permission checks can stay "owner only" and the relay only needs to handle your own devices.
+1. **Sharing:** is M4 ever wanted? If not, permission checks can stay "owner only" and the relay only needs to handle your own devices.
+2. **Custom domain** on Railway, or the default `*.up.railway.app`? Nothing in the build depends on it.
+
+Settled: NestJS, Railway, Postgres.

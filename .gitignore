@@ -4,3 +4,5 @@ target/
 .env
 *.log
 __pycache__/
+client-dist/
+client/.kinopio-client/

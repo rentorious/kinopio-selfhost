@@ -8,21 +8,23 @@ We don't vendor the Kinopio client. The build clones it at a pinned commit, appl
 
   > Required Notice: Copyright Pirijan Ketheswaran (http://kinopio.club)
 
-## Patch 1: hosts from env (M0, required)
+## Patch 1: same-origin hosts (M0, required)
 
-All hosts are hardcoded in `src/consts.js`. Make each read a Vite env var and fall back to the original value:
+`client/patches/0001-selfhost-same-origin-hosts.patch`. All hosts are hardcoded in `src/consts.js`. When the client is built with `VITE_SELFHOST=true`, the patch derives every host from `window.location.origin` at runtime, so one build works on any domain (the Railway URL, a custom domain, localhost):
 
-| Line(s) | Const | Env var | Example (single origin) |
-|---|---|---|---|
-| 44 | `cdnHost` | `VITE_CDN_HOST` | `https://kino.home.arpa/files` |
-| 68–74 | `kinopioDomain()` | `VITE_SITE_URL` | `https://kino.home.arpa` |
-| 75–81 | `apiHost(shouldUseProduction)` | `VITE_API_HOST` | `https://kino.home.arpa/api` |
-| 82–88 | `websocketHost()` | `VITE_WS_HOST` | `wss://kino.home.arpa/api/ws` |
-| 89–95 | `helperServerHost()` | `VITE_HELPER_HOST` | same as API (endpoint is SKIP anyway) |
+| Const | Self-hosted value |
+|---|---|
+| `cdnHost` | `<origin>/files` |
+| `kinopioDomain()` | `<origin>` |
+| `apiHost(shouldUseProduction)` | `<origin>/api`, even when `shouldUseProduction` is true (the Templates dialog passes it) |
+| `websocketHost()` | `ws(s)://<host>/api/ws` |
+| `helperServerHost()` | `<origin>/api` (its one endpoint is SKIP) |
 
-When the env var is set it must win even when `apiHost(true)` is called: the Templates dialog forces the production host that way (`components/dialogs/Templates.vue:26`).
+During pre-rendering (vite-ssg runs in Node, no `window`) the original Kinopio hosts are kept; they only end up in static marketing pages.
 
-Leave `imgproxyHost` alone. The client only routes `*.kinopio.club` URLs through it, so our own CDN URLs load directly.
+The patch also adds `/files` to the service worker's `navigateFallbackDenylist`, so opening an uploaded file in a new tab isn't answered with the app shell.
+
+Leave `imgproxyHost` alone. The client only routes `*.kinopio.club` URLs through it, so our own file URLs load directly.
 
 ## Patch 2: recognise our own space links (M3, nice to have)
 
@@ -38,28 +40,16 @@ Also `src/components/dialogs/CardDetails.vue` ~L1004 decides "is this an upload?
 ## Build
 
 ```bash
-git clone https://github.com/kinopio-club/kinopio-client.git && cd kinopio-client
-git checkout 0394e07b343d076347aaa214edb584e0856c4347
-git apply ../client/patches/*.patch
-npm ci                       # Node 22 (.nvmrc says 22.14.0)
-VITE_API_HOST=… VITE_WS_HOST=… VITE_CDN_HOST=… VITE_SITE_URL=… npm run build
+npm run client:build        # = bash client/build.sh → ./client-dist
 ```
 
-Verified on the pinned commit: `npm ci && npm run build` succeeds and produces a 17 MB static `dist/` (pre-rendered pages plus a PWA service worker). Build it in a multi-stage Dockerfile and copy `dist/` into the Caddy image.
+`client/build.sh` fetches the pinned commit, applies every patch in `client/patches/`, runs `npm ci` and `VITE_SELFHOST=true npm run build`, and copies the result plus the license and notice into `client-dist/`. The Dockerfile runs the same script in its first stage. Verified: about 40 s with a warm npm cache, 17 MB of static output.
 
 ## Serve
 
-`dist/_redirects` is Netlify's routing; its last rule sends every unknown path to the SPA. The Caddy equivalent:
+The NestJS app serves `client-dist/` itself (`src/common/client-static.ts`), mirroring the Netlify rules in the client's `_redirects`: real files first, then pre-rendered `<path>.html`, then the SPA shell `app.html`. `/api/*` and `/files/*` are never handled by the static layer.
 
-```
-handle {
-  root * /srv/kinopio
-  try_files {path} {path}.html /app.html
-  file_server
-}
-```
-
-Serve over HTTPS. The service worker, clipboard and some upload paths need a secure context.
+Railway terminates HTTPS, which the service worker, clipboard and some upload paths need.
 
 ## Things that still reach Kinopio's servers
 
