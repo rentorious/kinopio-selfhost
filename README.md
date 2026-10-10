@@ -1,6 +1,6 @@
 # kinopio-selfhost
 
-A self-hosted backend for the [Kinopio](https://kinopio.club) web client, so the spatial canvas can run on a home server with your data in your own Postgres and file bucket.
+A self-hosted backend for the [Kinopio](https://kinopio.club) web client, so the spatial canvas runs on your own Railway service with your data in your own Postgres and bucket.
 
 Kinopio's client is public; its server isn't. This repo is a from-scratch server that speaks the API the client expects, plus a small patch that points the client at it.
 
