@@ -1,0 +1,33 @@
+# kinopio-selfhost
+
+A self-hosted backend for the [Kinopio](https://kinopio.club) web client, so the spatial canvas can run on a home server with your data in your own Postgres and file bucket.
+
+Kinopio's client is public; its server isn't. This repo is a from-scratch server that speaks the API the client expects, plus a small patch that points the client at it.
+
+**Status:** spec written, no code yet. Start at [docs/SPEC.md](docs/SPEC.md).
+
+## Docs
+
+| File | What's in it |
+|---|---|
+| [docs/SPEC.md](docs/SPEC.md) | Scope, decisions, data model, core endpoint shapes, milestones, open questions |
+| [docs/ENDPOINTS.md](docs/ENDPOINTS.md) | Every endpoint the client calls, each assigned a milestone, stub or skip (generated) |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | The `POST /operations` write path and all 50 operation types |
+| [docs/WEBSOCKET.md](docs/WEBSOCKET.md) | Realtime relay protocol and the action allowlist |
+| [docs/CLIENT.md](docs/CLIENT.md) | Pinned client commit, the host patch, build and serving |
+
+## Keeping up with the client
+
+The docs are pinned to kinopio-client `0394e07`. When bumping it, run the checkers in `tools/`; they fail if the client added or removed endpoints or operation types:
+
+```bash
+python3 tools/endpoint_inventory.py ../kinopio-client > docs/ENDPOINTS.md
+python3 tools/operation_inventory.py ../kinopio-client
+```
+
+## License note
+
+- The server code in this repo is original work.
+- The Kinopio client is licensed under [PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0). Any patches to it in this repo (under `client/`) are changes to that software and carry the same license and its required notice: *Copyright Pirijan Ketheswaran (http://kinopio.club)*.
+- Because the server only exists to run that client, treat the whole setup as **personal and noncommercial**: no hosting it for others and no using it for paid work.
+- Kinopio is a small, community-funded project. If you end up relying on it, consider supporting it at kinopio.club.
