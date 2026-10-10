@@ -26,7 +26,15 @@ The patch also adds `/files` to the service worker's `navigateFallbackDenylist`,
 
 Leave `imgproxyHost` alone. The client only routes `*.kinopio.club` URLs through it, so our own file URLs load directly.
 
-## Patch 2: recognise our own space links (M3, nice to have)
+## Patch 2: installable PWA (done)
+
+`client/patches/0002-selfhost-installable-pwa.patch`. The client already registers a Workbox service worker (offline app shell, auto-update on deploy), but its manifest only sets `start_url`, so browsers never offer to install it: installability needs a name and 192 px / 512 px icons. The patch fills in the manifest in `vite.config.js`: name "Kinopio (self-hosted)", short name "Kinopio", standalone display, the icons already in `public/`, and an "Add to Inbox" shortcut that opens `/add` (long-press or right-click the app icon).
+
+Server side, `src/common/client-static.ts` sends `Cache-Control: no-cache` for `sw.js`, `registerSW.js`, the manifest and every HTML page, and `immutable` for the hashed bundles in `/assets`, so a new deploy reaches installed apps on their next launch.
+
+Verified in Chromium: no installability errors, service worker active, and the app shell loads with the network off.
+
+## Patch 3: recognise our own space links (M3, nice to have)
 
 Two places hardcode `https://kinopio.club/`, so links to spaces on our domain get URL-previewed instead of rendered as space links:
 

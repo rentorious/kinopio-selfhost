@@ -1,0 +1,37 @@
+diff --git a/vite.config.js b/vite.config.js
+index 26412fa..96b02d8 100644
+--- a/vite.config.js
++++ b/vite.config.js
+@@ -121,8 +121,31 @@ export default defineConfig(async ({ command, mode }) => {
+       VitePWA({
+         registerType: 'autoUpdate',
+         strategies: 'generateSW',
++        // kinopio-selfhost: a complete manifest so browsers offer "Install app"
++        // (the original only sets start_url, and installability needs a name and 192/512 icons)
+         manifest: {
+-          start_url: '/app'
++          id: '/app',
++          name: 'Kinopio (self-hosted)',
++          short_name: 'Kinopio',
++          description: 'Spatial thinking canvas, running on your own server',
++          start_url: '/app',
++          scope: '/',
++          display: 'standalone',
++          background_color: '#ffffff',
++          theme_color: '#ffffff',
++          icons: [
++            { src: '/android-chrome-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
++            { src: '/android-chrome-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
++          ],
++          shortcuts: [
++            {
++              name: 'Add to Inbox',
++              short_name: 'Add',
++              description: 'Quickly add a card to your Inbox',
++              url: '/add',
++              icons: [{ src: '/android-chrome-192x192.png', sizes: '192x192', type: 'image/png' }]
++            }
++          ]
+         },
+         workbox: {
+           navigateFallback: '/app.html',
