@@ -9,6 +9,7 @@ import { clientStatic } from './common/client-static'
 import { Config } from './config'
 import { Db } from './db/database'
 import { stubRouter } from './stubs/stubs'
+import { attachSocket } from './realtime/socket'
 
 /**
  * Build the app without listening, so tests can drive it with supertest.
@@ -28,5 +29,6 @@ export async function createApp (config: Config, db: Db, opts: { logger?: false 
   app.use(clientStatic(config.clientDist))
   app.setGlobalPrefix('api')
   await app.init()
+  attachSocket(app.getHttpServer())
   return app
 }

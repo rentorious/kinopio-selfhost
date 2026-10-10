@@ -4,7 +4,17 @@ A self-hosted backend for the [Kinopio](https://kinopio.club) web client, so the
 
 Kinopio's client is public; its server isn't. This repo is a from-scratch server that speaks the API the client expects, plus a small patch that points the client at it.
 
-**Status:** spec written, no code yet. Start at [docs/SPEC.md](docs/SPEC.md).
+**Status:** M1 (single-user core) done: sign-up/sign-in, spaces, and every save operation, tested with 131 integration tests plus a headless run of the real client on two devices. Next: M2 (uploads, link previews, live sync). Deploy steps: [docs/DEPLOY.md](docs/DEPLOY.md). Spec: [docs/SPEC.md](docs/SPEC.md).
+
+## Development
+
+```bash
+docker compose up -d          # Postgres on :5432
+npm install
+npm run client:build          # patched Kinopio client into ./client-dist
+npm run dev                   # http://localhost:3000
+npm test                      # needs a kinopio_test database (TEST_DATABASE_URL) and a kinopio-client checkout (KINOPIO_CLIENT_DIR) for fixtures
+```
 
 ## Docs
 
