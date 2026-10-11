@@ -1,14 +1,16 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, S3Client, S3ServiceException } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client, S3ServiceException } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import type { Readable } from 'node:stream'
 import type { BucketFilesConfig } from '../config'
-import type { ByteRange, FileInfo, FileStorage } from './storage'
+import type { ByteRange, DirectStorage, FileInfo } from './storage'
 
 /**
  * An S3-compatible bucket (Railway Storage Buckets). Private: files are only
- * reachable through GET /files/*, which streams them (SPEC.md §7).
+ * reachable through GET /files/*, which streams them (SPEC.md §7), and
+ * through signed links for media summaries (docs/MEDIA-SUMMARIES.md §6).
  */
-export class BucketStorage implements FileStorage {
+export class BucketStorage implements DirectStorage {
   private readonly s3: S3Client
   private readonly bucket: string
 
@@ -52,5 +54,24 @@ export class BucketStorage implements FileStorage {
 
   async delete (key: string): Promise<void> {
     await this.s3.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }))
+  }
+
+  async presignPut (key: string, contentType: string, expiresInSeconds: number): Promise<string> {
+    return await getSignedUrl(this.s3, new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }), { expiresIn: expiresInSeconds })
+  }
+
+  async presignGet (key: string, expiresInSeconds: number): Promise<string> {
+    return await getSignedUrl(this.s3, new GetObjectCommand({ Bucket: this.bucket, Key: key }), { expiresIn: expiresInSeconds })
+  }
+
+  async list (prefix: string): Promise<string[]> {
+    const keys: string[] = []
+    let token: string | undefined
+    do {
+      const res = await this.s3.send(new ListObjectsV2Command({ Bucket: this.bucket, Prefix: prefix, ContinuationToken: token }))
+      for (const o of res.Contents ?? []) if (o.Key) keys.push(o.Key)
+      token = res.IsTruncated ? res.NextContinuationToken : undefined
+    } while (token)
+    return keys
   }
 }

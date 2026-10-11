@@ -35,7 +35,7 @@ Migrations run automatically on every boot.
 | `MEDIA_TMP_DIR` | `<os tmpdir>/media-jobs` | Where a dropped media file waits until the worker has downloaded it. The container's disk is right: nothing here should survive a deploy. |
 | `MEDIA_MAX_BYTES` | `314572800` (300 MB) | Largest media file for a summary. |
 | `MEDIA_MAX_MINUTES` | `180` | Longest selected range. |
-| `MEDIA_TMP_MAX_AGE` | `3600000` (1 h) | Media files older than this are swept from `MEDIA_TMP_DIR`. |
+| `MEDIA_TMP_MAX_AGE` | `7200000` (2 h) | Media jobs still uploading or waiting after this fail, and their files are deleted. |
 
 ## 4. Your account
 
@@ -61,9 +61,13 @@ Dropping audio or video on a space can turn it into a summary card plus a transc
 
 1. Generate a token (`openssl rand -base64 32`) and set it on the app service as `WORKER_TOKEN`.
 2. Install the worker on the PC: [worker/README.md](../worker/README.md). It uses the same token and your Railway URL.
-3. Check: `GET /api/media-summaries/status` (signed in) reports `"online": true`, and the dialog that opens when you drop a clip says **Transcriber online**.
+3. Let the browser upload media straight to the bucket (Railway's proxy cuts uploads off after 5 minutes). Once per bucket:
+   ```bash
+   railway run --service <app> -- node tools/bucket-cors.mjs https://<your-app>.up.railway.app
+   ```
+4. Check: `GET /api/media-summaries/status` (signed in) reports `"online": true`, and the dialog that opens when you drop a clip says **Transcriber online**.
 
-Without `WORKER_TOKEN` the feature is off: the dialog says the transcriber is offline and **Upload as file** works as before. Media files never go to the bucket or the database.
+Without `WORKER_TOKEN` the feature is off: the dialog says the transcriber is offline and **Upload as file** works as before. Media files sit in the bucket under `.media/` only until the worker has downloaded them, and never go to the database.
 
 ## Backups
 

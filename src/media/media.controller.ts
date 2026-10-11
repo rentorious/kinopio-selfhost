@@ -60,6 +60,49 @@ export class MediaController {
   }
 
   /**
+   * Start an upload straight to the bucket (when files are in one). JSON: the
+   * same fields as the multipart form, plus mimeType and size. Returns a
+   * signed PUT link that works for an hour; the browser sends the file there
+   * with that Content-Type, then calls POST :id/uploaded. Requests through
+   * Railway's proxy must finish their body within 5 minutes, which a long
+   * video on a home connection doesn't.
+   */
+  @Post('direct')
+  @HttpCode(200)
+  @UseGuards(SignedInGuard)
+  async direct (@CurrentUser() user: AuthUser, @Body() body: Record<string, unknown>, @Req() req: Request) {
+    if (!this.media.enabled || !this.hub.online) throw new ApiError(503, 'the transcriber is offline', { error: 'transcriber_offline' })
+    if (!this.media.bucket) throw new ApiError(404, 'direct uploads need the bucket', { error: 'direct_unsupported' })
+    const fields: Record<string, string> = {}
+    for (const [k, v] of Object.entries(body ?? {})) if (typeof v === 'string' || typeof v === 'number') fields[k] = String(v)
+    const size = Number(fields.size)
+    if (!Number.isInteger(size) || size <= 0) throw new ApiError(400, 'size is required')
+    if (size > this.config.media.maxBytes) throw new ApiError(413, `files can't be larger than ${Math.floor(this.config.media.maxBytes / 1024 / 1024)} MB`)
+    const mimeType = /^(audio|video)\/[\w.+-]{1,100}$/.test(fields.mimeType ?? '') ? fields.mimeType : ''
+    if (!mimeType) throw new ApiError(415, 'only audio and video files can be summarized')
+    const parsed = parseJobFields(fields, this.config.media.maxMinutes)
+    if (typeof parsed === 'string') throw new ApiError(400, parsed)
+    if (await this.spaces.canEdit(this.db, user.id, parsed.spaceId) === 'forbidden') throw unauthorized('you can only summarize into spaces you can edit')
+    const job = await this.media.createJob({ ...parsed, userId: user.id, origin: origin(req), mimeType })
+    try {
+      return { jobId: job.id, url: await this.media.directUploadUrl(job), method: 'PUT', headers: { 'Content-Type': mimeType } }
+    } catch (err) {
+      await this.media.uploadFailed(job.id, 'could not start the upload')
+      throw err
+    }
+  }
+
+  @Post(':id/uploaded')
+  @HttpCode(202)
+  @UseGuards(SignedInGuard)
+  async uploaded (@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    try {
+      await this.media.directUploadDone(id, user.id)
+      return { jobId: id }
+    } catch (err) { throw toApiError(err) }
+  }
+
+  /**
    * Multipart: spaceId, cardId, fileName, startMs, endMs, language, topic,
    * x, y, then the file. Everything is checked before the file is read, and
    * the file only ever goes to MEDIA_TMP_DIR.
@@ -195,6 +238,9 @@ export class WorkerController {
   async download (@Param('id') id: string, @Res() res: Response): Promise<void> {
     try {
       const job = await this.media.jobForWorker(id)
+      // in the bucket: send the worker there (fetch drops our Authorization header on the way)
+      const url = await this.media.workerDownloadUrl(job)
+      if (url) { res.redirect(302, url); return }
       const file = this.media.tmpPath(job.id)
       const { size } = await fs.promises.stat(file)
       res.status(200).set({ 'Content-Type': job.mimeType, 'Content-Length': String(size), 'Cache-Control': 'no-store' })
