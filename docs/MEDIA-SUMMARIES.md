@@ -9,7 +9,7 @@ Milestone **M2b**: after the websocket relay (M2), before M3. **Built.** Setting
 | Where the work runs | A **worker on the home PC** (AMD GPU): whisper.cpp with Vulkan for speech-to-text, a headless Claude Code session for the summary | Railway has no GPU. The PC is always on, already runs whisper.cpp on its GPU, and is logged in to Claude Code. |
 | How the worker connects | **Outbound only**: the worker opens a websocket to the server and pulls files over HTTPS | No port forwarding, which keeps SPEC §2's "no home-server networking". The server always knows whether the worker is online. |
 | Transcript | A **linked transcript space**: one card per section, with timestamps | Cards cap at 4,000 characters (`consts.cardCharacterLimit`); an hour of speech is ~50,000. A space keeps it native: editable, and searchable once M3 search lands. |
-| Trimming | **On the worker** with ffmpeg; the browser uploads the whole file plus the chosen range | Files are up to ~300 MB. No ffmpeg.wasm in the client. |
+| Trimming | **In the browser first** (M2c, [AUDIO-PREP.md](AUDIO-PREP.md)): Mediabunny on WebCodecs cuts the selected range and keeps only its audio as mono Opus, ~20 MB an hour. The worker still cuts with ffmpeg, at `startMs - fileOffsetMs` | A one-hour video is ~300 MB; its audio is ~20 MB, so the upload takes seconds. Mediabunny uses the browser's own encoders; ffmpeg.wasm would be a ~30 MB download and much slower. If prep fails, the original is uploaded as before. |
 | Upload path | **Straight to the bucket** with a signed PUT link that works for 60 minutes; the worker downloads it the same way | Railway's proxy cuts request bodies off after 5 minutes, which a long video on a home connection doesn't beat. Without a bucket (local dev) the file goes through the server as a form. |
 | Summary format | **Abstract + key points** on the card | Both were wanted. |
 | Media storage | **Never kept**: in the bucket under `.media/` until the worker has it, worker temp folder until the job ends | See §6. |
@@ -21,11 +21,11 @@ Milestone **M2b**: after the websocket relay (M2), before M3. **Built.** Setting
 2. The dialog shows the worker's status. When it's offline it says "Transcriber offline (last seen 14:02)", and only **Upload as file** and **Cancel** work.
 3. The file plays from your disk (an object URL; nothing is uploaded yet). Scrub, then **Set at playhead** for the start or the end, or type `m:ss` / `h:mm:ss`. **Play from start** plays the selection, **Whole file** resets it, and the dialog shows the selected length. If the browser can't play the file, the whole file is processed (up to `MEDIA_MAX_MINUTES`).
 4. Pick the **language** (remembered per device) and optionally a **topic hint** (e.g. "rhizosphere microbiome, viticulture").
-5. **Summarize**: a placeholder card appears at the drop point with the usual upload progress bar, and the dialog closes.
+5. **Summarize**: a placeholder card appears at the drop point and the dialog closes. When the worker supports it (`status.prepared`), the browser first cuts the selected part and keeps only its audio; the card says "⏳ lecture.mp4 · preparing audio 40%" meanwhile. Then the card shows the usual upload progress bar. Skipped for an audio file of 25 MB or less with all of it selected. If prep fails, the original file is uploaded.
 6. The card text follows the stages ("⏳ lecture.mp4 · transcribing 40%"), live on every open device.
 7. When it's done, the same card becomes the summary card, with a link to the new transcript space.
 
-Deleting the placeholder card cancels the job.
+Deleting the placeholder card cancels the job (during audio prep: the conversion, and nothing is uploaded).
 
 ## 3. Pieces
 
@@ -60,15 +60,15 @@ One job runs at a time (one GPU). A second drop while a job is running waits in 
 ## 5. Worker connection and availability
 
 - The worker connects to `wss://<origin>/api/worker/ws` with `Authorization: Bearer <WORKER_TOKEN>` (server env, compared in constant time). One worker at a time: a new connection replaces the old one.
-- The server pings every 15 s and drops a worker that misses a ping, so a dead connection shows as offline within 30 s. The worker counts as **online** while its socket is open.
+- The server pings every 15 s and drops a worker that misses a ping, so a dead connection shows as offline within 30 s. The worker counts as **online** while its socket is open and it has sent `hello`.
 - Worker presence is kept in memory (one service instance, no table).
 
 Socket messages:
 
 | Direction | `type` | Fields |
 |---|---|---|
-| worker → server | `hello` | `version`, `model`, `gpu`, `activeJobId?` |
-| server → worker | `job` | `jobId`, `fileName`, `mimeType`, `bytes`, `startMs`, `endMs`, `language`, `topic` |
+| worker → server | `hello` | `version`, `model`, `gpu`, `activeJobId?`, `features?` (`['fileOffset']` from worker 0.2.0) |
+| server → worker | `job` | `jobId`, `fileName`, `mimeType`, `bytes`, `startMs`, `endMs`, `fileOffsetMs`, `language`, `topic` |
 | worker → server | `downloaded` | `jobId` (the server deletes its copy) |
 | worker → server | `progress` | `jobId`, `stage` (`transcribing` \| `summarizing`), `percent?` |
 | worker → server | `failed` | `jobId`, `reason` |
@@ -81,7 +81,7 @@ The file and the result go over HTTP, not the socket (the file can be 250 MB):
 
 **Worker drops mid-job:** if it reconnects within 2 minutes and sends `hello` with `activeJobId`, the job carries on. Otherwise it fails with "transcriber went offline".
 
-**Client side:** `GET /api/media-summaries/status` returns `{ online, lastSeenAt, busy, queued, model }`. The dialog calls it when it opens and every 10 s while it's open.
+**Client side:** `GET /api/media-summaries/status` returns `{ online, prepared, lastSeenAt, busy, queued, model }`. `prepared` is true when the connected worker announced `fileOffset`; only then does the browser upload a cut. The dialog calls it when it opens and every 10 s while it's open.
 
 ## 6. The media file is never kept
 
@@ -100,6 +100,8 @@ The file and the result go over HTTP, not the socket (the file can be 250 MB):
 ffprobe media                     # reject files with no audio stream
 ffmpeg -ss <start> -i media -t <length> -vn -ar 16000 -ac 1 -c:a pcm_s16le audio.wav
 ```
+
+`startMs`/`endMs` are positions in the **original** file. The downloaded file starts at `fileOffsetMs` in the original (0 unless the browser prepared it), so `<start>` is `startMs - fileOffsetMs`, and the end is clamped to `fileOffsetMs` + the file's duration. Segment times add `startMs`, so they come out in the original's time.
 
 `-ss` before `-i` seeks fast. `-t` (a length) instead of `-to` avoids the input/output timestamp ambiguity when seeking on the input.
 
@@ -204,10 +206,10 @@ These are our own endpoints, not part of the client's API list (ENDPOINTS.md).
 
 | Endpoint | Body | Response |
 |---|---|---|
-| `GET /api/media-summaries/status` | — | `{ online, lastSeenAt, busy, queued, model }` |
+| `GET /api/media-summaries/status` | — | `{ online, prepared, lastSeenAt, busy, queued, model }` |
 | `POST /api/media-summaries/direct` | JSON: the form fields below plus `mimeType` and `size` | `200 { jobId, url, method: 'PUT', headers }`: PUT the file to `url` with those headers. `404 { "error": "direct_unsupported" }` without a bucket |
 | `POST /api/media-summaries/:id/uploaded` | — | `202 { jobId }` once the file is in the bucket; `400` if it isn't, `413` if it's too big, `409` if the job isn't uploading |
-| `POST /api/media-summaries` | Multipart (no bucket): `spaceId`, `cardId`, `fileName`, `startMs`, `endMs`, `language`, `topic`, `x`, `y`, then `file` | `202 { jobId }` |
+| `POST /api/media-summaries` | Multipart (no bucket): `spaceId`, `cardId`, `fileName`, `startMs`, `endMs`, `fileOffsetMs?`, `language`, `topic`, `x`, `y`, then `file` | `202 { jobId }` |
 | `GET /api/media-summaries/:id` | — | `{ status, percent, error }` |
 | `DELETE /api/media-summaries/:id` | — | `200 {}`; sends the worker `cancel` |
 
@@ -217,6 +219,7 @@ Both upload paths check, before any file is sent:
 - Worker online, else `503 { "error": "transcriber_offline" }`.
 - Size under `MEDIA_MAX_BYTES` (default 300 MB), else `413`: the declared `size` and the file in the bucket for direct uploads, `Content-Length` and the stream for the form; selected range under `MEDIA_MAX_MINUTES` (default 180), else `400`.
 - MIME type `audio/*` or `video/*`, else `415`. The worker's `ffprobe` is the real check.
+- `fileOffsetMs` (optional, default 0): where the uploaded file's 0 sits in the original. Whole milliseconds, `0 ≤ fileOffsetMs ≤ startMs`, else `400`. `fileName` stays the original's name.
 
 A `removeCard` or `deleteCard` in `POST /operations` for a card with a running job cancels that job.
 
@@ -228,6 +231,7 @@ Two small hooks plus new files, so bumping the client rarely conflicts:
 - **Hook 2:** mount the dialog in `Space.vue`, next to the other space dialogs.
 - **New files:** `stores/useMediaSummaryStore.js` (open/close with `{ file, position }`) and `components/dialogs/MediaSummary.vue` (status, `<video>`/`<audio>` on an object URL, start/end, language, topic hint). The dialog calls the §10 endpoints itself; there's no separate API helper.
 - **Upload:** create the placeholder card with `consts.uploadPlaceholder`, then ask for a direct upload, PUT the file to the bucket by XHR and confirm it; on `direct_unsupported`, send the form by XHR instead. If the PUT fails the dialog cancels the job. Progress goes through `addPendingUpload` (keyed by card id, **without** `spaceId`) and `updatePendingUpload`, so the card shows the usual progress bar. On load or error it's set to 100%, which is what clears the bar: the client's `removePendingUpload` keeps entries that carry the current `spaceId`, so a pending upload with one would stay at 99% forever.
+- **Audio prep (M2c, [AUDIO-PREP.md](AUDIO-PREP.md)):** `media/prepareAudio.worker.js`, a Web Worker loaded only when needed, runs Mediabunny: trim to the selection, drop video, encode mono 48 kHz Opus at 48 kbit/s in Ogg (AAC in MP4 where Opus can't be encoded). Its output starts at timestamp 0, so `fileOffsetMs` = the selected start (checked in Chromium: a beep at 40 s lands at 10.000 s in a 30–60 s cut). The dialog uploads the result as `<name>.opus` (or `.m4a`) with `fileOffsetMs`. It checks the card still exists on each progress message and cancels the conversion if not. Any error falls back to the original, logged as `🚑 audio prep`. `client/build.sh` installs `mediabunny` (pinned next to `COMMIT`) with `--no-save`, so the client's lockfile stays untouched. The worker chunk is ~575 KB (141 KB gzipped).
 - Upload or job errors turn the card into `⚠️ name · reason` and show a notification.
 - Revoke the object URL when the dialog closes.
 
@@ -258,8 +262,9 @@ create table media_jobs (
   file_name           text not null,
   mime_type           text not null default 'application/octet-stream',
   bytes               bigint,
-  start_ms            bigint not null,
+  start_ms            bigint not null,      -- positions in the original file
   end_ms              bigint not null,
+  file_offset_ms      bigint not null default 0, -- where the uploaded file's 0 sits (003, M2c)
   language            text not null default 'auto',
   topic               text not null default '',
   status              text not null check (status in

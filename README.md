@@ -4,7 +4,7 @@ A self-hosted backend for the [Kinopio](https://kinopio.club) web client, so the
 
 Kinopio's client is public; its server isn't. This repo is a from-scratch server that speaks the API the client expects, plus a small patch that points the client at it.
 
-**Status:** M1 (single-user core), M2 (uploads, link previews, live sync between devices) and M2b (media summaries: drop audio or video, get a summary card and a transcript, processed on your own PC) done, with 217 integration tests plus headless runs of the real client on two devices. Next: M3 (search, tags, todos, backups). Deploy steps: [docs/DEPLOY.md](docs/DEPLOY.md). Transcription worker: [worker/README.md](worker/README.md). Spec: [docs/SPEC.md](docs/SPEC.md).
+**Status:** M1 (single-user core), M2 (uploads, link previews, live sync between devices) M2b (media summaries: drop audio or video, get a summary card and a transcript, processed on your own PC) and M2c (the browser uploads only the selected part's audio) done, with 226 integration tests plus headless runs of the real client on two devices. Next: M3 (search, tags, todos, backups). Deploy steps: [docs/DEPLOY.md](docs/DEPLOY.md). Transcription worker: [worker/README.md](worker/README.md). Spec: [docs/SPEC.md](docs/SPEC.md).
 
 ## Development
 
@@ -26,6 +26,7 @@ npm test                      # needs a kinopio_test database (TEST_DATABASE_URL
 | [docs/WEBSOCKET.md](docs/WEBSOCKET.md) | Realtime relay protocol and the action allowlist |
 | [docs/CLIENT.md](docs/CLIENT.md) | Pinned client commit, the host patch, build and serving |
 | [docs/MEDIA-SUMMARIES.md](docs/MEDIA-SUMMARIES.md) | M2b: audio/video to summary card plus transcript space, the home-PC worker, and the no-storage rules |
+| [docs/AUDIO-PREP.md](docs/AUDIO-PREP.md) | M2c: cutting the selection and keeping only its audio in the browser before upload |
 | [worker/README.md](worker/README.md) | Installing and running the transcription worker on your PC |
 
 ## Keeping up with the client
