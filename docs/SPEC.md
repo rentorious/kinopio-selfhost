@@ -8,12 +8,13 @@ Companion docs:
 - [OPERATIONS.md](OPERATIONS.md): the `POST /operations` write path and all 50 operation names
 - [WEBSOCKET.md](WEBSOCKET.md): realtime relay protocol and the action allowlist
 - [CLIENT.md](CLIENT.md): pinned client commit, the patch, build and serving
+- [MEDIA-SUMMARIES.md](MEDIA-SUMMARIES.md): M2b, turning a dropped audio or video file into a summary card and a transcript space, processed on a worker on your own PC
 
 Everything here was read out of kinopio-client `0394e07` (2026-10-09). The real kinopio-server isn't public, so "the server must…" below means "the client breaks or misbehaves otherwise", not "this is how Kinopio does it".
 
 ## 1. Scope
 
-**In:** spaces, cards, connections, boxes, lists, lines, drawings, tags, uploads, link previews, live sync between your own devices, inbox, search, backups.
+**In:** spaces, cards, connections, boxes, lists, lines, drawings, tags, uploads, link previews, live sync between your own devices, inbox, search, backups, media summaries (MEDIA-SUMMARIES.md).
 
 **Out:** billing, Explore/public discovery, groups, notifications, favorites, email (password reset, invites), are.na import, PDF export, image/GIF search, moderation, third-party app API keys.
 
@@ -251,11 +252,16 @@ Each milestone ends with a manual run of the patched client against the server.
 - Uploads (§7), link previews (§8), websocket relay (WEBSOCKET.md), `POST /card/to-inbox` + `createCardInInbox`.
 - *Done when:* dragging an image onto the canvas persists across reloads; pasting a link shows a preview; two browsers show each other's cursors and edits live.
 
+**M2b: media summaries** (MEDIA-SUMMARIES.md)
+- `media_jobs`, the client endpoints, the worker socket and endpoints, the `worker/` package for the home PC (ffmpeg, whisper.cpp with Vulkan, a headless Claude Code session).
+- Client Patch 3 (own-domain space links, moved up from M3) and Patch 4 (the media summary dialog).
+- Needs the websocket relay from M2 for live card updates. Doesn't need the bucket: media never goes there.
+- *Done when:* MEDIA-SUMMARIES.md §15.
+
 **M3: quality of life**
 - `POST /card/search` (trigram index), `GET /user/tags`, `GET /card/by-tag-name/:name`, todos, date mentions, hidden spaces.
 - `GET /space/download-all` (zip of one JSON per space). Railway Postgres backups cover the database; add a periodic copy of the bucket somewhere outside Railway.
 - Other-space checkbox toggles (`PATCH /card/multiple`, `PATCH /box`), `PATCH /card/update-counter`, `POST /item/multiple`, public user endpoints, password and email change.
-- Client Patch 2 (own-domain space links).
 
 **M4: sharing (optional)**
 - Collaborators via invite keys (`PATCH`/`DELETE /space/collaborator`, `addCollaboratorToSpaces`), read-only links, membership in `/user/spaces`, permission checks in the relay, `userLeftSpace`.

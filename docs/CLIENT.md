@@ -34,7 +34,9 @@ Server side, `src/common/client-static.ts` sends `Cache-Control: no-cache` for `
 
 Verified in Chromium: no installability errors, service worker active, and the app shell loads with the network off.
 
-## Patch 3: recognise our own space links (M3, nice to have)
+## Patch 3: recognise our own space links (M2b)
+
+Moved up from M3: the media summary card links to its transcript space (MEDIA-SUMMARIES.md §8), and without this patch that link shows as a URL preview.
 
 Two places hardcode `https://kinopio.club/`, so links to spaces on our domain get URL-previewed instead of rendered as space links:
 
@@ -44,6 +46,10 @@ Two places hardcode `https://kinopio.club/`, so links to spaces on our domain ge
 Build both from `consts.kinopioDomain()`.
 
 Also `src/components/dialogs/CardDetails.vue` ~L1004 decides "is this an upload?" by checking for `cdn.kinopio.club` or `linodeobjects.com` in the URL. Add `consts.cdnHost`, or non-image uploads (PDFs etc.) get sent for link previews.
+
+## Patch 4: media summary dialog (M2b)
+
+Dropping or pasting a single audio or video file opens our own dialog (preview, trim, language, topic hint) instead of uploading it. Two small hooks, in `uploadStore.addCardsAndUploadFiles` and `App.vue`, plus new files. Details in MEDIA-SUMMARIES.md §11.
 
 ## Build
 
