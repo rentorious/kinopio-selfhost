@@ -1,0 +1,15 @@
+#!/usr/bin/env node
+// Fake whisper-cli: prints progress like whisper.cpp and writes <-of>.json.
+// A model path containing "loopy" produces a repetition loop.
+const fs = require('fs')
+const args = process.argv.slice(2)
+const get = flag => args[args.indexOf(flag) + 1]
+for (const f of ['-mc', '-et', '-oj', '-pp', '-f', '-of', '-m', '-l']) if (!args.includes(f)) { console.error(`missing ${f}`); process.exit(2) }
+for (const p of [0, 25, 50, 75, 100]) process.stderr.write(`whisper_print_progress_callback: progress = ${String(p).padStart(3)}%\n`)
+const loopy = get('-m').includes('loopy')
+const lines = loopy
+  ? Array.from({ length: 8 }, () => 'I presented the presentation about the reasons for my career.')
+  : ['Hello everyone, today the rhesus fur microbiome.', 'Roots feed microbes, and microbes protect the vine.', 'Thank you very much for your attention.']
+const transcription = lines.map((text, i) => ({ offsets: { from: i * 4000, to: (i + 1) * 4000 }, text: ' ' + text }))
+fs.writeFileSync(get('-of') + '.json', JSON.stringify({ result: { language: 'en' }, transcription }))
+if (process.env.FAKE_WHISPER_LOG) fs.appendFileSync(process.env.FAKE_WHISPER_LOG, get('-m') + '\n')

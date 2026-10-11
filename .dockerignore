@@ -5,3 +5,4 @@ client/.kinopio-client
 .git
 *.log
 data
+worker

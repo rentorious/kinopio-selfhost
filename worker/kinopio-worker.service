@@ -1,0 +1,17 @@
+# systemd user service for the transcription worker. Install with the steps in
+# worker/README.md; the paths below assume the repo is cloned to ~/kinopio-selfhost.
+[Unit]
+Description=kinopio-selfhost transcription worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/kinopio-worker/env
+WorkingDirectory=%h/kinopio-selfhost/worker
+# Use the absolute path from `which node` if node comes from nvm or similar.
+ExecStart=/usr/bin/env node dist/worker/src/main.js
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,22 @@
+{
+  "name": "kinopio-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Transcribes and summarizes media for kinopio-selfhost on your own PC (docs/MEDIA-SUMMARIES.md)",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/worker/src/main.js"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.2",
+    "typescript": "~5.9.3"
+  }
+}

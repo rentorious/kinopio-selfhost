@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake ffprobe for worker tests: a file containing NOAUDIO has only a video stream.
+file="${@: -1}"
+if grep -q NOAUDIO "$file" 2>/dev/null; then
+  echo '{"streams":[{"codec_type":"video"}],"format":{"duration":"600.0"}}'
+else
+  echo '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}],"format":{"duration":"3600.0"}}'
+fi
