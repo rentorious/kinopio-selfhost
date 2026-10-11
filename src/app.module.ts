@@ -4,6 +4,10 @@ import { Config, CONFIG } from './config'
 import { JsonErrorFilter } from './common/errors'
 import { DB, Db } from './db/database'
 import { FILE_STORAGE, FileStorage } from './files/storage'
+import { CardEvents } from './media/card-events'
+import { MediaController, WorkerController, WorkerGuard } from './media/media.controller'
+import { MediaService } from './media/media.service'
+import { WorkerHub } from './media/worker-hub'
 import { UploadsController } from './files/uploads.controller'
 import { MetaController } from './meta/meta.controller'
 import { OperationsController } from './operations/operations.controller'
@@ -20,7 +24,7 @@ export class AppModule {
   static register (config: Config, db: Db, storage: FileStorage): DynamicModule {
     return {
       module: AppModule,
-      controllers: [MetaController, UsersController, SpacesController, OperationsController, UploadsController, PreviewsController],
+      controllers: [MetaController, UsersController, SpacesController, OperationsController, UploadsController, PreviewsController, MediaController, WorkerController],
       providers: [
         { provide: CONFIG, useValue: config },
         { provide: DB, useValue: db },
@@ -29,7 +33,11 @@ export class AppModule {
         SpacesService,
         UsersService,
         OperationsService,
-        Relay
+        Relay,
+        CardEvents,
+        WorkerHub,
+        WorkerGuard,
+        MediaService
       ]
     }
   }

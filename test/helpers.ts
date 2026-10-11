@@ -30,6 +30,14 @@ export function testConfig (overrides: Partial<Config> = {}): Config {
     uploadSigningSecret: 'test-upload-secret',
     uploadMaxBytes: 5 * 1024 * 1024,
     urlPreview: { allowHosts: [], timeoutMs: 1000 },
+    media: {
+      workerToken: 'test-worker-token',
+      tmpDir: fs.mkdtempSync(path.join(os.tmpdir(), 'kinopio-media-')),
+      maxBytes: 5 * 1024 * 1024,
+      maxMinutes: 180,
+      tmpMaxAgeMs: 60 * 60 * 1000,
+      offlineGraceMs: 2 * 60 * 1000
+    },
     ...overrides
   }
 }
@@ -46,7 +54,7 @@ export async function setup (overrides: Partial<Config> = {}): Promise<TestConte
   const config = testConfig(overrides)
   const db = createDb(config.databaseUrl, false)
   await migrate(db, () => undefined)
-  await sql`truncate users, spaces, items, applied_operations cascade`.execute(db)
+  await sql`truncate users, spaces, items, applied_operations, media_jobs cascade`.execute(db)
   const app = await createApp(config, db, { logger: false })
   const users = new UsersService(db, config, new SpacesService(db))
   return {
