@@ -214,14 +214,21 @@ The client asks for a "presigned post" and then POSTs a multipart form (`fields`
 
 Anyone who knows a file URL can read it, which is the same model as Kinopio's own CDN. Keys include the card or space id, so they aren't guessable.
 
+Files are served from our own origin, where the apiKey lives in localStorage, so anything a browser would run as a page (HTML, SVG, XML, JavaScript types) gets `Content-Security-Policy: sandbox`, and every file gets `X-Content-Type-Options: nosniff`.
+
+`requestSpaceId` must be a space the user can edit, but a space that doesn't exist yet is allowed: on a brand-new space the first drop can arrive before the debounced `createSpace` op.
+
+Storage drivers: `FILES_DRIVER=s3` (default when Railway's `BUCKET` variable is set) uses the bucket through the S3 API with multipart uploads, so the size doesn't have to be known up front. `local` writes to `FILES_DIR` for development.
+
 Bandwidth note: streaming through the service counts as Railway service egress (bucket-to-service traffic is free). For personal use that's negligible; if it ever matters, `/files/*` can 302 to a short-lived presigned GET instead.
 
 ## 8. Link previews (M2)
 
 `POST /services/url-preview`, body `{url, card}`:
 
-- Fetch `url` server-side with a 5 s timeout and a 2 MB cap. **Refuse private and loopback addresses** (SSRF guard), except on an explicit allowlist.
-- Parse `og:title` / `<title>`, `og:description`, `og:image`, and the favicon. For YouTube/Vimeo, set an embed URL in `urlPreviewIframeUrl`.
+- Fetch `url` server-side with a 5 s timeout and a 2 MB cap. **Refuse private and loopback addresses** (SSRF guard), except on an explicit allowlist (`URL_PREVIEW_ALLOW_HOSTS`). The check runs inside the socket's DNS lookup, so it covers the address actually connected to and every redirect hop. Also refused: `localhost`, `*.internal` (Railway's private DNS) and IP literals in private ranges, including `fd00::/8`.
+- Signed-in users only, 60 previews a minute each.
+- Parse `og:title` / `<title>`, `og:description`, `og:image`, and the favicon. For YouTube/Vimeo, set an embed URL in `urlPreviewIframeUrl` and take the title and thumbnail from the site's oEmbed endpoint; if that can't be reached, still return the embed with the URL as its title.
 - Respond with **exactly 200** and a card patch: `{ id: card.id, urlPreviewUrl: <the requested url, unchanged>, urlPreviewTitle, urlPreviewDescription, urlPreviewImage, urlPreviewFavicon, urlPreviewIframeUrl?, urlPreviewIsVisible: true }`. If `urlPreviewUrl` differs from the request, the client keeps re-requesting.
 - On failure return `404` JSON. The client marks the URL as errored and won't retry.
 

@@ -16,7 +16,7 @@ COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
-# 3. Runtime: one process serves the client, the API and (later) files and the websocket.
+# 3. Runtime: one process serves the client, the API, uploaded files and the websocket.
 FROM node:22-slim
 ENV NODE_ENV=production CLIENT_DIST=/app/client-dist
 WORKDIR /app

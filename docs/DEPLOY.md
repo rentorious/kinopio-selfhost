@@ -1,6 +1,6 @@
 # Deploying on Railway
 
-One Railway project with three pieces: this repo as a service (built from the `Dockerfile`), a Postgres database, and (from M2) a Storage Bucket.
+One Railway project with three pieces: this repo as a service (built from the `Dockerfile`), a Postgres database, and a Storage Bucket for uploads.
 
 ## 1. Service from the repo
 
@@ -25,6 +25,12 @@ Migrations run automatically on every boot.
 | `JSON_LIMIT` | `50mb` | Sign-in uploads every locally cached space in one request. |
 | `SIGN_IN_RATE_MAX` / `SIGN_IN_RATE_WINDOW_MS` | `10` / `900000` | Sign-in and sign-up attempts per IP and per email. |
 | `DATABASE_SSL` | `false` | Set `true` only if you point `DATABASE_URL` at Railway's public proxy URL. |
+| `UPLOAD_SIGNING_SECRET` | random at boot | Signs upload tokens (SPEC.md §7). Set it to a long random string (`openssl rand -base64 32`); otherwise an upload that starts just before a redeploy fails. |
+| `UPLOAD_MAX_BYTES` | `268435456` (256 MB) | Largest single upload. |
+| `FILES_DRIVER` | `s3` when `BUCKET` is set, else `local` | `local` keeps files in `FILES_DIR` (default `data/files`), which on Railway is wiped by every deploy. Use the bucket (§5). |
+| `BUCKET_FORCE_PATH_STYLE` | `false` | Set `true` if the bucket's Credentials tab says to use path-style URLs (older buckets). |
+| `URL_PREVIEW_TIMEOUT_MS` | `5000` | Link preview fetch timeout. |
+| `URL_PREVIEW_ALLOW_HOSTS` | — | Comma-separated hosts that link previews may fetch even though they resolve to private addresses. Leave empty. |
 
 ## 4. Your account
 
@@ -34,9 +40,15 @@ Two options:
 - **From the CLI** (creates the account and its Inbox without the UI): in the Railway dashboard open the app service's shell, or use `railway ssh`, then run
   `node dist/cli/create-user.js --email you@example.com --password '…' --name You`
 
-## 5. Bucket (M2)
+## 5. Bucket
 
-Not needed yet. When uploads land: **+ New → Bucket**, then reference its `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION` and `ENDPOINT` variables in the app service.
+Uploads (images, PDFs, audio and video dropped on a space) live in a Railway Storage Bucket. Without one they go to the container's disk and disappear on the next deploy.
+
+1. In the project: **+ New → Bucket**.
+2. In the app service's **Variables**, add references to the bucket's `BUCKET`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`, `REGION` and `ENDPOINT` (e.g. `BUCKET` = `${{Bucket.BUCKET}}`, using your bucket service's name). With `BUCKET` set, the server uses the bucket automatically.
+3. Check the bucket's **Credentials** tab: if it says to use path-style URLs, also set `BUCKET_FORCE_PATH_STYLE=true`.
+
+The bucket stays private. Files are streamed to the browser through `GET /files/*`, which counts as service egress (bucket egress itself is free). Railway buckets don't support lifecycle rules, which nothing here needs.
 
 ## Backups
 

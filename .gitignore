@@ -6,3 +6,4 @@ target/
 __pycache__/
 client-dist/
 client/.kinopio-client/
+data/

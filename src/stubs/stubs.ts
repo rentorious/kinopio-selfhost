@@ -114,12 +114,9 @@ export const STUB_ROUTES: StubRoute[] = [
   skip('DELETE', '/group/group-user'),
   skip('DELETE', '/group'),
 
-  // uploads, notifications, services
-  { method: 'POST', path: '/upload/presigned-post', tier: 'M2', status: 404, body: notSupported },
-  { method: 'POST', path: '/upload/presigned-post/multiple', tier: 'M2', status: 404, body: notSupported },
+  // notifications, services
   stub('GET', '/notification', []),
   stub('DELETE', '/notification/all', {}),
-  { method: 'POST', path: '/services/url-preview', tier: 'M2', status: 404, body: notSupported },
   stub('POST', '/services/image-search', { photos: [] }),
   stub('POST', '/services/gif-image-search', []),
   stub('GET', '/services/community-backgrounds', []),

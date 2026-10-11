@@ -1,5 +1,6 @@
 import 'reflect-metadata'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { INestApplication } from '@nestjs/common'
 import { sql } from 'kysely'
@@ -25,6 +26,10 @@ export function testConfig (overrides: Partial<Config> = {}): Config {
     clientDist: '/nonexistent-client-dist',
     jsonLimit: '50mb',
     signInRateLimit: { max: 1000, windowMs: 60_000 },
+    files: { driver: 'local', dir: fs.mkdtempSync(path.join(os.tmpdir(), 'kinopio-files-')) },
+    uploadSigningSecret: 'test-upload-secret',
+    uploadMaxBytes: 5 * 1024 * 1024,
+    urlPreview: { allowHosts: [], timeoutMs: 1000 },
     ...overrides
   }
 }
