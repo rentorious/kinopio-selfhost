@@ -62,9 +62,13 @@ export class WorkerHub extends EventEmitter implements OnModuleDestroy {
     this.wss.close()
   }
 
-  /** Connected. A worker that stops answering pings is dropped within two ping intervals. */
+  /**
+   * Connected and said hello. Until the hello arrives the server can't tell a
+   * reconnect that kept its job from one that lost it, so no job is offered.
+   * A worker that stops answering pings is dropped within two ping intervals.
+   */
   get online (): boolean {
-    return !!this.socket && this.socket.readyState === WebSocket.OPEN
+    return !!this.socket && this.socket.readyState === WebSocket.OPEN && !!this.info
   }
 
   get lastSeenAt (): Date | undefined { return this.seenAt }
@@ -84,6 +88,7 @@ export class WorkerHub extends EventEmitter implements OnModuleDestroy {
       old.terminate()
     }
     this.socket = socket
+    this.info = undefined
     this.alive = true
     this.seenAt = new Date()
     socket.on('pong', () => { this.alive = true; this.seenAt = new Date() })

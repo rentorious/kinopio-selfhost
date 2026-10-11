@@ -316,6 +316,16 @@ describe('media summaries', () => {
       expect(tmpFiles()).toEqual([])
     })
 
+    it('counts the worker as online only once it has said hello', async () => {
+      const w = await open(`ws://${base}/api/worker/ws`, { Authorization: 'Bearer test-worker-token' })
+      sockets.push(w)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      expect((await media().status()).online).toBe(false)
+      await upload().expect(503)
+      w.send({ type: 'hello', version: '1', model: 'large-v3', gpu: 'Test GPU' })
+      await waitFor(async () => (await media().status()).online)
+    })
+
     it('ignores progress for a job the worker does not have', async () => {
       const w = await worker()
       w.send({ type: 'progress', jobId: 'someOtherJob', stage: 'transcribing', percent: 5 })

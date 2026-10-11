@@ -85,6 +85,8 @@ describe('PC worker against the real server', () => {
       job = (await t.http().get(`/api/media-summaries/${jobId}`).set(auth()).expect(200)).body
       return ['done', 'failed', 'canceled'].includes(job.status)
     })
+    // the job row is final before the card text is; let that land too
+    await t.app.get(MediaService).idle()
     return job
   }
 
