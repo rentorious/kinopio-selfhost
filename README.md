@@ -4,7 +4,7 @@ A self-hosted backend for the [Kinopio](https://kinopio.club) web client, so the
 
 Kinopio's client is public; its server isn't. This repo is a from-scratch server that speaks the API the client expects, plus a small patch that points the client at it.
 
-**Status:** M1 (single-user core) done: sign-up/sign-in, spaces, and every save operation, tested with 131 integration tests plus a headless run of the real client on two devices. Next: M2 (uploads, link previews, live sync). Deploy steps: [docs/DEPLOY.md](docs/DEPLOY.md). Spec: [docs/SPEC.md](docs/SPEC.md).
+**Status:** M1 (single-user core) done: sign-up/sign-in, spaces, and every save operation, tested with 131 integration tests plus a headless run of the real client on two devices. Next: M2 (uploads, link previews, live sync), then M2b (media summaries: drop audio or video, get a summary card and a transcript, processed on your own PC). Deploy steps: [docs/DEPLOY.md](docs/DEPLOY.md). Spec: [docs/SPEC.md](docs/SPEC.md).
 
 ## Development
 
@@ -25,6 +25,7 @@ npm test                      # needs a kinopio_test database (TEST_DATABASE_URL
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | The `POST /operations` write path and all 50 operation types |
 | [docs/WEBSOCKET.md](docs/WEBSOCKET.md) | Realtime relay protocol and the action allowlist |
 | [docs/CLIENT.md](docs/CLIENT.md) | Pinned client commit, the host patch, build and serving |
+| [docs/MEDIA-SUMMARIES.md](docs/MEDIA-SUMMARIES.md) | M2b: audio/video to summary card plus transcript space, the home-PC worker, and the no-storage rules |
 
 ## Keeping up with the client
 
