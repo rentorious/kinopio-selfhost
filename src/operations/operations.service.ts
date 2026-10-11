@@ -3,6 +3,7 @@ import { Kysely, sql } from 'kysely'
 import { Database, DB, Db, ItemType, JsonObject, json } from '../db/database'
 import { isValidId } from '../common/ids'
 import { deleteItem, ownedSpaceIds, patchItem, upsertItem } from '../items/items.repo'
+import { CardEvents } from '../media/card-events'
 import { itemDataFrom } from '../spaces/space-data'
 import { SpacesService } from '../spaces/spaces.service'
 import { UsersService } from '../users/users.service'
@@ -51,7 +52,8 @@ export class OperationsService {
   constructor (
     @Inject(DB) private readonly db: Db,
     private readonly spaces: SpacesService,
-    private readonly users: UsersService
+    private readonly users: UsersService,
+    private readonly cardEvents: CardEvents
   ) {
     this.handlers = {
       // spaces
@@ -70,8 +72,14 @@ export class OperationsService {
       // cards
       createCard: this.create('card'),
       updateCard: this.update('card'),
-      removeCard: async (ctx, body) => this.patch(ctx, 'card', this.id(body), { isRemoved: true }),
-      deleteCard: this.remove('card'),
+      removeCard: async (ctx, body) => {
+        await this.patch(ctx, 'card', this.id(body), { isRemoved: true })
+        this.cardEvents.cardRemoved(ctx.spaceId!, this.id(body))
+      },
+      deleteCard: async (ctx, body) => {
+        await this.remove('card')(ctx, body)
+        this.cardEvents.cardRemoved(ctx.spaceId!, this.id(body))
+      },
       restoreRemovedCard: async (ctx, body) => {
         const spaceId = await this.editable(ctx)
         await upsertItem(ctx.trx, spaceId, 'card', this.id(body), ctx.userId, { ...itemDataFrom(body), isRemoved: false })

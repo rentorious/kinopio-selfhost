@@ -93,7 +93,7 @@ C = {
     'GET /space/download-all': ('M3', 'zip blob', 'Saved as kinopio-spaces.zip. Contents are ours to choose (one JSON per space).'),
     # items
     'POST /operations': ('M1', '`{}`', 'The write path. See OPERATIONS.md.'),
-    'POST /item/multiple': ('M3', '`{"cards":[],"spaces":[]}`', 'A read: looks up items that cards link to. Stub the empty shape until M3.'),
+    'POST /item/multiple': ('M2', '`{"cards":[],"spaces":[]}`', 'A read: the cards and spaces that cards link to, limited to what the viewer can read. Pulled into M2b so a summary card\'s transcript link shows the space name.'),
     'GET /card/by-link-to-space/:param': ('STUB', '`{"spaces":[],"cards":[]}`', 'Backlinks sidebar.'),
     'GET /card/:param/history': ('STUB', '`[]`', ''),
     'PATCH /card/multiple': ('M3', '`{}`', '`[{id, name, spaceId}]`: checkbox toggles on cards in other spaces.'),

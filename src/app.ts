@@ -11,6 +11,7 @@ import { Db } from './db/database'
 import { filesRouter } from './files/files-router'
 import { createStorage } from './files/storage'
 import { stubRouter } from './stubs/stubs'
+import { WorkerHub } from './media/worker-hub'
 import { Relay } from './realtime/relay'
 import { routeUpgrades } from './realtime/upgrades'
 
@@ -35,6 +36,6 @@ export async function createApp (config: Config, db: Db, opts: { logger?: false 
   app.use(clientStatic(config.clientDist))
   app.setGlobalPrefix('api')
   await app.init()
-  routeUpgrades(app.getHttpServer(), { '/api/ws': app.get(Relay).wss })
+  routeUpgrades(app.getHttpServer(), { '/api/ws': app.get(Relay).wss, '/api/worker/ws': app.get(WorkerHub).wss })
   return app
 }

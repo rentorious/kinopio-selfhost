@@ -88,7 +88,6 @@ export const STUB_ROUTES: StubRoute[] = [
   { method: 'GET', path: '/space/download-all', tier: 'M3', status: 404, body: notSupported },
 
   // items
-  stub('POST', '/item/multiple', { cards: [], spaces: [] }, 'M3'),
   stub('GET', '/card/by-link-to-space/:id', { spaces: [], cards: [] }),
   stub('GET', '/card/:id/history', []),
   stub('POST', '/card/search', [], 'M3'),

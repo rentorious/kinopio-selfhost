@@ -1,6 +1,6 @@
 # Media summaries
 
-Milestone **M2b**: after the websocket relay (M2), before M3. Drop an audio or video file on the canvas, pick the part you want, and get a **summary card** in the current space plus a linked **transcript space**. Transcription and summarizing run on a worker on your own PC; the server only passes the file through and never keeps it.
+Milestone **M2b**: after the websocket relay (M2), before M3. **Built.** Setting up the worker on the PC: [worker/README.md](../worker/README.md). Drop an audio or video file on the canvas, pick the part you want, and get a **summary card** in the current space plus a linked **transcript space**. Transcription and summarizing run on a worker on your own PC; the server only passes the file through and never keeps it.
 
 ## 1. Decisions
 
@@ -18,7 +18,7 @@ Milestone **M2b**: after the websocket relay (M2), before M3. Drop an audio or v
 
 1. Drop (or paste) one audio or video file on a space you can edit. Instead of uploading it, the client opens the **Media summary** dialog.
 2. The dialog shows the worker's status. When it's offline it says "Transcriber offline (last seen 14:02)", and only **Upload as file** and **Cancel** work.
-3. The file plays from your disk (an object URL; nothing is uploaded yet). Scrub, then **Set start** / **Set end** at the playhead, or type `mm:ss`. The dialog shows the selected length.
+3. The file plays from your disk (an object URL; nothing is uploaded yet). Scrub, then **Set at playhead** for the start or the end, or type `m:ss` / `h:mm:ss`. **Play from start** plays the selection, **Whole file** resets it, and the dialog shows the selected length. If the browser can't play the file, the whole file is processed (up to `MEDIA_MAX_MINUTES`).
 4. Pick the **language** (remembered per device) and optionally a **topic hint** (e.g. "rhizosphere microbiome, viticulture").
 5. **Summarize**: a placeholder card appears at the drop point with the usual upload progress bar, and the dialog closes.
 6. The card text follows the stages ("⏳ lecture.mp4 · transcribing 40%"), live on every open device.
@@ -59,7 +59,7 @@ One job runs at a time (one GPU). A second drop while a job is running waits in 
 ## 5. Worker connection and availability
 
 - The worker connects to `wss://<origin>/api/worker/ws` with `Authorization: Bearer <WORKER_TOKEN>` (server env, compared in constant time). One worker at a time: a new connection replaces the old one.
-- The server pings every 15 s. The worker counts as **online** while its socket is open and it answered the last ping.
+- The server pings every 15 s and drops a worker that misses a ping, so a dead connection shows as offline within 30 s. The worker counts as **online** while its socket is open.
 - Worker presence is kept in memory (one service instance, no table).
 
 Socket messages:
@@ -110,6 +110,7 @@ whisper-cli -m ggml-large-v3.bin -f audio.wav -l <language|auto> \
   --vad -vm ggml-silero-v5.1.2.bin -mc 0 -et 2.8 -oj -pp
 ```
 
+- `--vad -vm …` is added only when `VAD_MODEL` is set; the fallback rerun below only when `WHISPER_FALLBACK_MODEL` is set.
 - `-mc 0 -et 2.8` stop the repetition loops large-v3 fell into on the test lecture. `-mc 0` also makes whisper ignore `--prompt`, so the topic hint goes to the Claude step instead.
 - `-oj` writes segments with timestamps (used for section times). `-pp` prints progress, which the worker turns into `progress` messages, throttled to every 5% or 10 s.
 - **Loop check:** if the same segment text repeats more than 5 times in a row, rerun once with the fallback model (`ggml-large-v2.bin`).
@@ -143,8 +144,8 @@ Session constraints:
 
 - It runs on the PC's Claude Code login (the subscription, like Taskflow), not an API key.
 - Tools are limited to reading and writing inside the job folder: no shell, no web. The transcript is untrusted text; this is what keeps instructions spoken in the audio from doing anything.
-- A turn cap and a 15-minute timeout.
-- The exact CLI flags are set in `worker/` and checked against the current Claude Code docs when implementing.
+- A turn cap (`CLAUDE_MAX_TURNS`, default 40) and a 15-minute timeout (`CLAUDE_TIMEOUT_MS`).
+- Flags (`worker/src/summarize.ts`, checked against the Claude Code CLI reference): `-p <prompt> --output-format json --tools Read,Write,Edit,Glob --disallowedTools "mcp__*" --strict-mcp-config --permission-mode acceptEdits --max-turns 40 --no-session-persistence --restricted`, plus `--model` when `CLAUDE_MODEL` is set. `--restricted` needs Claude Code 2.1.248 or later; `CLAUDE_RESTRICTED=false` drops it on an older CLI.
 
 The worker parses the files and checks every limit above. If anything fails, it reruns the session once with the errors appended. Then it posts:
 
@@ -168,20 +169,22 @@ Everything goes through `OperationsService.apply(userId, ops)` with the same ops
 
 **Transcript space:** named `Transcript: <title>`, private, owned by you.
 
-- First card: `# <title>`, the source line, and a link back to the space holding the summary card.
-- One card per section: `**05:12–08:18 · <heading>**`, then the text, stacked in a column with positions estimated from text length (or in a Kinopio list, open question 2).
+- First card: `# <title>`, the source line, and `Summary card: <link>` back to the space holding the summary card.
+- One card per section: `**5:12–8:18 · <heading>**`, then the text. Cards are 520 px wide, stacked in one column; the server estimates each card's height from its text so they don't overlap (Kinopio lists weren't needed).
 - Last card: the corrections, if there are any.
 
-**Summary card:** the placeholder card is updated in place (same id and position), so the result lands exactly where you dropped the file:
+**Summary card:** the placeholder card is updated in place (same id and position), so the result lands exactly where you dropped the file, widened to 360 px:
 
 ```
 <card.md>
 
 🎧 lecture.mp4 · 5:00–55:00 (50 min) · English
-📄 <transcript space URL>
+<transcript space URL>
 ```
 
-The link renders as a space link only with **Patch 3** (CLIENT.md), which moves from M3 into this milestone.
+The client hides a space URL at the end of a card and shows it as a space link chip under the text. That needs **Patch 3** (CLIENT.md), and the chip's name comes from `POST /api/item/multiple`, so both moved from M3 into this milestone.
+
+If the placeholder card hasn't reached the database yet when the result is ready (the client saves on its own schedule), the final update retries every 3 s for 30 s, then creates the card at the drop point (`card_x`, `card_y`).
 
 ## 9. Live updates
 
@@ -191,7 +194,7 @@ Stage text and the final summary reach open tabs through the relay. The server s
 { "message": { "action": "updateCardsState", "store": "cardStore", "updates": [{ "id": "<cardId>", "name": "…" }] }, "spaceId": "<spaceId>" }
 ```
 
-There's no `clientId`, so no client filters it out as its own (WEBSOCKET.md). The same change is saved through `updateCard` with a fresh `nameUpdatedAt`, so a reload, or a device that was offline, gets it too.
+There's no `clientId`, so no client filters it out as its own (WEBSOCKET.md). The final update also carries `resizeWidth: 360`; the client re-measures the card, so it grows to fit the longer text. The same change is saved through `updateCard` with a fresh `nameUpdatedAt`, so a reload, or a device that was offline, gets it too.
 
 ## 10. Client endpoints
 
@@ -200,27 +203,28 @@ These are our own endpoints, not part of the client's API list (ENDPOINTS.md).
 | Endpoint | Body | Response |
 |---|---|---|
 | `GET /api/media-summaries/status` | — | `{ online, lastSeenAt, busy, queued, model }` |
-| `POST /api/media-summaries` | Multipart: `spaceId`, `cardId`, `fileName`, `startMs`, `endMs`, `language`, `topic`, then `file` | `202 { jobId }` |
+| `POST /api/media-summaries` | Multipart: `spaceId`, `cardId`, `fileName`, `startMs`, `endMs`, `language`, `topic`, `x`, `y`, then `file` | `202 { jobId }` |
 | `GET /api/media-summaries/:id` | — | `{ status, percent, error }` |
-| `DELETE /api/media-summaries/:id` | — | `204`; sends the worker `cancel` |
+| `DELETE /api/media-summaries/:id` | — | `200 {}`; sends the worker `cancel` |
 
 `POST` checks, all made before reading the file so a rejected upload stops early:
 
 - Signed in, and allowed to edit `spaceId`.
 - Worker online, else `503 { "error": "transcriber_offline" }`.
-- Size under `MEDIA_MAX_BYTES` (default 300 MB); selected range under `MEDIA_MAX_MINUTES` (default 180).
-- MIME type `audio/*` or `video/*`. The worker's `ffprobe` is the real check.
+- Size under `MEDIA_MAX_BYTES` (default 300 MB), checked against `Content-Length` and again while streaming, else `413`; selected range under `MEDIA_MAX_MINUTES` (default 180), else `400`.
+- MIME type `audio/*` or `video/*`, else `415`. The worker's `ffprobe` is the real check.
 
-A `removeCard` in `POST /operations` for a card with a running job cancels that job.
+A `removeCard` or `deleteCard` in `POST /operations` for a card with a running job cancels that job.
 
 ## 11. Client Patch 4: the media summary dialog
 
 Two small hooks plus new files, so bumping the client rarely conflicts:
 
 - **Hook 1:** `uploadStore.addCardsAndUploadFiles`. Drops on the canvas and on connections, keyboard paste and the image picker all go through it. If it gets exactly one file whose type starts with `audio/` or `video/`, it opens the dialog with `{ file, position }` and returns. An `asFile` flag skips the check for **Upload as file**. Dropping a file onto an existing card (`Card.vue`, `uploadStore.uploadFile`) attaches it to that card and stays a normal upload.
-- **Hook 2:** mount the dialog in `App.vue`.
-- **New files:** `components/dialogs/MediaSummary.vue` (status, `<video>`/`<audio>` on an object URL, start/end, language, topic hint) and an API helper for §10.
-- **Upload:** create the placeholder card the same way `addCardsAndUploadFiles` does (`consts.uploadPlaceholder`, same z), then send the form by XHR with progress through `addPendingUpload` / `removePendingUpload`, so the card shows the usual progress bar.
+- **Hook 2:** mount the dialog in `Space.vue`, next to the other space dialogs.
+- **New files:** `stores/useMediaSummaryStore.js` (open/close with `{ file, position }`) and `components/dialogs/MediaSummary.vue` (status, `<video>`/`<audio>` on an object URL, start/end, language, topic hint). The dialog calls the §10 endpoints itself; there's no separate API helper.
+- **Upload:** create the placeholder card with `consts.uploadPlaceholder`, then send the form by XHR. Progress goes through `addPendingUpload` (keyed by card id, **without** `spaceId`) and `updatePendingUpload`, so the card shows the usual progress bar. On load or error it's set to 100%, which is what clears the bar: the client's `removePendingUpload` keeps entries that carry the current `spaceId`, so a pending upload with one would stay at 99% forever.
+- Upload or job errors turn the card into `⚠️ name · reason` and show a notification.
 - Revoke the object URL when the dialog closes.
 
 ## 12. When things go wrong
@@ -244,10 +248,14 @@ create table media_jobs (
   user_id             text not null references users(id) on delete cascade,
   space_id            text not null,
   card_id             text not null,
+  card_x              double precision,     -- drop point, if the card has to be recreated
+  card_y              double precision,
+  origin              text not null,        -- public origin, for links in the result
   file_name           text not null,
+  mime_type           text not null default 'application/octet-stream',
   bytes               bigint,
-  start_ms            int not null,
-  end_ms              int not null,
+  start_ms            bigint not null,
+  end_ms              bigint not null,
   language            text not null default 'auto',
   topic               text not null default '',
   status              text not null check (status in
@@ -259,7 +267,7 @@ create table media_jobs (
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now()
 );
-create index media_jobs_active_idx on media_jobs (status) where status not in ('done', 'failed', 'canceled');
+create index media_jobs_active_idx on media_jobs (created_at) where status not in ('done', 'failed', 'canceled');
 create index media_jobs_card_idx on media_jobs (card_id);
 ```
 
@@ -270,16 +278,20 @@ There's no file path column: the temp file is always `MEDIA_TMP_DIR/<id>`.
 | Where | Variable | Default | Notes |
 |---|---|---|---|
 | Server | `WORKER_TOKEN` | — | Enables the feature. Without it, status always reports `online: false`. |
-| Server | `MEDIA_TMP_DIR` | `/tmp/media-jobs` | Ephemeral disk |
+| Server | `MEDIA_TMP_DIR` | `<os tmpdir>/media-jobs` | Ephemeral disk |
 | Server | `MEDIA_MAX_BYTES` | `314572800` (300 MB) | |
 | Server | `MEDIA_MAX_MINUTES` | `180` | Length of the selected range |
 | Server | `MEDIA_TMP_MAX_AGE` | `3600000` (1 h) | Sweep cutoff |
-| Worker | `SERVER_URL`, `WORKER_TOKEN` | — | |
-| Worker | `WHISPER_BIN`, `WHISPER_MODEL`, `WHISPER_FALLBACK_MODEL`, `VAD_MODEL` | — | Paths from the whisper.cpp Vulkan build |
-| Worker | `CLAUDE_BIN` | `claude` | |
-| Worker | `JOB_DIR` | `~/.cache/kinopio-worker` | |
+| Worker | `SERVER_URL`, `WORKER_TOKEN` | — | Required |
+| Worker | `WHISPER_BIN`, `WHISPER_MODEL` | `whisper-cli`, — | Paths from the whisper.cpp Vulkan build; the model is required |
+| Worker | `WHISPER_FALLBACK_MODEL`, `VAD_MODEL`, `WHISPER_THREADS` | — | Optional |
+| Worker | `FFMPEG_BIN`, `FFPROBE_BIN` | `ffmpeg`, `ffprobe` | |
+| Worker | `CLAUDE_BIN`, `CLAUDE_MODEL` | `claude`, the CLI's default | |
+| Worker | `CLAUDE_RESTRICTED`, `CLAUDE_MAX_TURNS`, `CLAUDE_TIMEOUT_MS`, `CLAUDE_EXTRA_ARGS` | `true`, `40`, 15 min, — | |
+| Worker | `JOB_DIR` | `~/.cache/kinopio-worker` | Wiped on start |
+| Worker | `WORKER_GPU_NAME` | `unknown GPU` | Shown in the worker's `hello` |
 
-The worker runs as a systemd user service, so it starts with the PC and restarts if it crashes.
+`worker/env.example` has all of them. The worker runs as a systemd user service (`worker/kinopio-worker.service`), so it starts with the PC and restarts if it crashes.
 
 ## 15. Done when
 
@@ -287,12 +299,14 @@ The worker runs as a systemd user service, so it starts with the PC and restarts
 - With the worker stopped, the dialog says it's offline and nothing is uploaded.
 - Deleting the placeholder mid-job cancels it.
 - After every job, `MEDIA_TMP_DIR` and the worker's `JOB_DIR` are empty.
-- Integration tests cover the endpoints, the result-contract validation, the sweep and cancel, using a fake worker.
+- Integration tests cover the endpoints, the result-contract validation, the sweep and cancel, using a fake worker (`test/media.spec.ts`), and the worker pipeline against stand-in `ffmpeg`, `whisper-cli` and `claude` scripts (`test/worker.spec.ts`).
+
+All of these were checked with the real patched client in two browsers, the real worker and real ffmpeg (whisper and Claude stood in by the test scripts): the dialog, the live stages on both devices, the summary card with its transcript link, the transcript space, empty temp folders afterwards, and the offline dialog with **Upload as file**.
 
 ## 16. Open questions
 
 1. **Queue while the PC is off?** Not planned, since the file would wait on the server. Revisit if blocking gets annoying.
-2. **Section layout:** can the transcript cards go in a Kinopio list so the client stacks them, or does the server have to compute positions? Check how the pinned client lays out list children.
-3. **Server-originated relay messages:** confirm in the pinned client that an `updateCardsState` with no `user` resizes the card correctly after a long name change.
-4. **Claude Code flags and model** for the session, checked against the current docs at implementation time.
+2. ~~Section layout~~: the server computes a column layout (§8).
+3. ~~Server-originated relay messages~~: confirmed; the card grows to fit after the update (§9).
+4. ~~Claude Code flags~~: set (§7.3). The model is the CLI's default unless `CLAUDE_MODEL` is set.
 5. **Subscription limits:** the summary session and Taskflow share the same Claude subscription. A long lecture is one large session, so watch for contention.

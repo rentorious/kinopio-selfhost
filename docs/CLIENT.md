@@ -34,22 +34,24 @@ Server side, `src/common/client-static.ts` sends `Cache-Control: no-cache` for `
 
 Verified in Chromium: no installability errors, service worker active, and the app shell loads with the network off.
 
-## Patch 3: recognise our own space links (M2b)
+## Patch 3: recognise our own space links (done, M2b)
 
-Moved up from M3: the media summary card links to its transcript space (MEDIA-SUMMARIES.md §8), and without this patch that link shows as a URL preview.
+`client/patches/0003-selfhost-own-space-links.patch`. Moved up from M3: the media summary card links to its transcript space (MEDIA-SUMMARIES.md §8), and without this patch that link shows as a URL preview.
 
-Two places hardcode `https://kinopio.club/`, so links to spaces on our domain get URL-previewed instead of rendered as space links:
+Two places hardcode `https://kinopio.club/`, so links to spaces on our domain got URL-previewed instead of rendered as space links:
 
-- `src/utils.js` ~L2517: `spaceUrlPattern` regex
-- `src/components/Card.vue` ~L1176: `isNotKinopioUrl`
+- `src/utils.js` `urlIsSpace`: when the client isn't on kinopio.club, it also matches `<our origin>/<slug-id>`, skipping `/invite?`, `/api/` and `/files/`.
+- `src/components/Card.vue` `isNotKinopioUrl`: also treats `consts.kinopioDomain()` as Kinopio.
 
-Build both from `consts.kinopioDomain()`.
+`src/components/dialogs/CardDetails.vue` decides "is this an upload?" by checking for `cdn.kinopio.club` or `linodeobjects.com` in the URL; the patch adds `consts.cdnHost`, so non-image uploads (PDFs etc.) aren't sent for link previews.
 
-Also `src/components/dialogs/CardDetails.vue` ~L1004 decides "is this an upload?" by checking for `cdn.kinopio.club` or `linodeobjects.com` in the URL. Add `consts.cdnHost`, or non-image uploads (PDFs etc.) get sent for link previews.
+The link chip's name comes from `POST /api/item/multiple`, implemented in M2b for the same reason.
 
-## Patch 4: media summary dialog (M2b)
+## Patch 4: media summary dialog (done, M2b)
 
-Dropping or pasting a single audio or video file opens our own dialog (preview, trim, language, topic hint) instead of uploading it. Two small hooks, in `uploadStore.addCardsAndUploadFiles` and `App.vue`, plus new files. Details in MEDIA-SUMMARIES.md §11.
+`client/patches/0004-selfhost-media-summary-dialog.patch`. Dropping or pasting a single audio or video file opens our own dialog (preview, trim, language, topic hint) instead of uploading it. Two small hooks, in `uploadStore.addCardsAndUploadFiles` (an `asFile` flag for **Upload as file**) and `Space.vue` (mounts the dialog), plus two new files: `stores/useMediaSummaryStore.js` and `components/dialogs/MediaSummary.vue`. Details in MEDIA-SUMMARIES.md §11.
+
+Verified in Chromium against the real worker: the dialog, trimming, the upload progress bar, live stage text on two devices, the summary card and its transcript space link, and the offline state.
 
 ## Build
 

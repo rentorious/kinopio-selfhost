@@ -54,11 +54,37 @@ export interface AppliedOperationsTable {
   applied_at: Generated<Date>
 }
 
+export type MediaJobStatus = 'uploading' | 'queued' | 'downloading' | 'transcribing' | 'summarizing' | 'building' | 'done' | 'failed' | 'canceled'
+
+export interface MediaJobsTable {
+  id: string
+  user_id: string
+  space_id: string
+  card_id: string
+  card_x: number | null
+  card_y: number | null
+  origin: string
+  file_name: string
+  mime_type: Generated<string>
+  bytes: string | number | null
+  start_ms: string | number
+  end_ms: string | number
+  language: Generated<string>
+  topic: Generated<string>
+  status: MediaJobStatus
+  percent: number | null
+  error: string | null
+  transcript_space_id: string | null
+  created_at: Generated<Date>
+  updated_at: Generated<Date>
+}
+
 export interface Database {
   users: UsersTable
   spaces: SpacesTable
   items: ItemsTable
   applied_operations: AppliedOperationsTable
+  media_jobs: MediaJobsTable
 }
 
 export type Db = Kysely<Database>

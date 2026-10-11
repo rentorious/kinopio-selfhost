@@ -143,3 +143,39 @@ describe('spaces', () => {
     await t.http().get(`/api/space/${hello.id}/removed-cards`).set(auth(other)).expect(401)
   })
 })
+
+describe('POST /item/multiple', () => {
+  let t: TestContext
+  let me: { id: string, apiKey: string }
+  let other: { id: string, apiKey: string }
+  const auth = (u: { apiKey: string }) => ({ Authorization: u.apiKey })
+
+  beforeEach(async () => {
+    t = await setup()
+    const a = await t.users.createUser({ email: 'me@x.com', password: 'pw', withInbox: true })
+    const b = await t.users.createUser({ email: 'other@x.com', password: 'pw', withInbox: true })
+    me = { id: String(a.id), apiKey: String(a.apiKey) }
+    other = { id: String(b.id), apiKey: String(b.apiKey) }
+    await t.http().post('/api/space').set(auth(me)).send({ id: 'mySpace1234567890abcd', name: 'Transcript: A talk', cards: [{ id: 'myCard1234567890abcde', x: 1, y: 1, name: 'hello' }] }).expect(200)
+    await t.http().post('/api/space').set(auth(other)).send({ id: 'theirSpace1234567890a', name: 'Secret', cards: [{ id: 'theirCard1234567890ab', x: 1, y: 1, name: 'secret' }] }).expect(200)
+    await t.http().post('/api/space').set(auth(other)).send({ id: 'openSpace1234567890ab', name: 'Open', privacy: 'open' }).expect(200)
+  })
+  afterEach(async () => { await t.close() })
+
+  it('returns the linked spaces and cards the viewer can read, and nothing else', async () => {
+    const res = await t.http().post('/api/item/multiple').set(auth(me)).send({
+      spaceIds: ['mySpace1234567890abcd', 'theirSpace1234567890a', 'openSpace1234567890ab', 'missing123456789012ab', 'bad id!'],
+      cardIds: ['myCard1234567890abcde', 'theirCard1234567890ab'],
+      invites: []
+    }).expect(200)
+    expect(res.body.spaces.map((s: Json) => s.id)).toEqual(['mySpace1234567890abcd', 'openSpace1234567890ab'])
+    expect(res.body.spaces[0]).toMatchObject({ name: 'Transcript: A talk', url: 'transcript-a-talk-mySpace1234567890abcd', privacy: 'private', users: [expect.objectContaining({ id: me.id })] })
+    expect(res.body.cards).toEqual([expect.objectContaining({ id: 'myCard1234567890abcde', name: 'hello', spaceId: 'mySpace1234567890abcd', spaceName: 'Transcript: A talk' })])
+  })
+
+  it('works signed out for public spaces, and with an empty body', async () => {
+    const res = await t.http().post('/api/item/multiple').send({ spaceIds: ['openSpace1234567890ab', 'mySpace1234567890abcd'] }).expect(200)
+    expect(res.body.spaces.map((s: Json) => s.id)).toEqual(['openSpace1234567890ab'])
+    expect((await t.http().post('/api/item/multiple').send({}).expect(200)).body).toEqual({ cards: [], spaces: [] })
+  })
+})

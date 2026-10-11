@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fake ffmpeg: checks the cut arguments are there and writes a stand-in WAV.
+args="$*"
+[[ "$args" == *"-ss "* && "$args" == *" -t "* && "$args" == *"-ar 16000"* && "$args" == *"-ac 1"* ]] || { echo "bad args: $args" >&2; exit 1; }
+printf 'RIFFfakewav' > "${@: -1}"

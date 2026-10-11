@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import os from 'node:os'
 import path from 'node:path'
 
 export interface Config {
@@ -21,6 +22,16 @@ export interface Config {
     /** Hosts that may be fetched even though they resolve to private addresses (SSRF guard exceptions). */
     allowHosts: string[]
     timeoutMs: number
+  }
+  /** Media summaries (docs/MEDIA-SUMMARIES.md §14). No WORKER_TOKEN = the feature is off. */
+  media: {
+    workerToken?: string
+    tmpDir: string
+    maxBytes: number
+    maxMinutes: number
+    tmpMaxAgeMs: number
+    /** How long a worker may be gone mid-job before the job fails. */
+    offlineGraceMs: number
   }
 }
 
@@ -69,6 +80,14 @@ export function loadConfig (): Config {
     urlPreview: {
       allowHosts: env('URL_PREVIEW_ALLOW_HOSTS', '').split(',').map(h => h.trim().toLowerCase()).filter(Boolean),
       timeoutMs: Number(env('URL_PREVIEW_TIMEOUT_MS', '5000'))
+    },
+    media: {
+      workerToken: process.env.WORKER_TOKEN || undefined,
+      tmpDir: path.resolve(env('MEDIA_TMP_DIR', path.join(os.tmpdir(), 'media-jobs'))),
+      maxBytes: Number(env('MEDIA_MAX_BYTES', String(300 * 1024 * 1024))),
+      maxMinutes: Number(env('MEDIA_MAX_MINUTES', '180')),
+      tmpMaxAgeMs: Number(env('MEDIA_TMP_MAX_AGE', String(60 * 60 * 1000))),
+      offlineGraceMs: 2 * 60 * 1000
     }
   }
 }

@@ -259,16 +259,17 @@ Each milestone ends with a manual run of the patched client against the server.
 - Uploads (§7), link previews (§8), websocket relay (WEBSOCKET.md), `POST /card/to-inbox` + `createCardInInbox`.
 - *Done when:* dragging an image onto the canvas persists across reloads; pasting a link shows a preview; two browsers show each other's cursors and edits live.
 
-**M2b: media summaries** (MEDIA-SUMMARIES.md)
+**M2b: media summaries** (MEDIA-SUMMARIES.md) — done
 - `media_jobs`, the client endpoints, the worker socket and endpoints, the `worker/` package for the home PC (ffmpeg, whisper.cpp with Vulkan, a headless Claude Code session).
 - Client Patch 3 (own-domain space links, moved up from M3) and Patch 4 (the media summary dialog).
+- `POST /item/multiple` (moved up from M3), so the summary card's link to its transcript space shows the space's name.
 - Needs the websocket relay from M2 for live card updates. Doesn't need the bucket: media never goes there.
 - *Done when:* MEDIA-SUMMARIES.md §15.
 
 **M3: quality of life**
 - `POST /card/search` (trigram index), `GET /user/tags`, `GET /card/by-tag-name/:name`, todos, date mentions, hidden spaces.
 - `GET /space/download-all` (zip of one JSON per space). Railway Postgres backups cover the database; add a periodic copy of the bucket somewhere outside Railway.
-- Other-space checkbox toggles (`PATCH /card/multiple`, `PATCH /box`), `PATCH /card/update-counter`, `POST /item/multiple`, public user endpoints, password and email change.
+- Other-space checkbox toggles (`PATCH /card/multiple`, `PATCH /box`), `PATCH /card/update-counter`, public user endpoints, password and email change.
 
 **M4: sharing (optional)**
 - Collaborators via invite keys (`PATCH`/`DELETE /space/collaborator`, `addCollaboratorToSpaces`), read-only links, membership in `/user/spaces`, permission checks in the relay, `userLeftSpace`.
