@@ -86,7 +86,7 @@ export function loadConfig (): Config {
       tmpDir: path.resolve(env('MEDIA_TMP_DIR', path.join(os.tmpdir(), 'media-jobs'))),
       maxBytes: Number(env('MEDIA_MAX_BYTES', String(300 * 1024 * 1024))),
       maxMinutes: Number(env('MEDIA_MAX_MINUTES', '180')),
-      tmpMaxAgeMs: Number(env('MEDIA_TMP_MAX_AGE', String(60 * 60 * 1000))),
+      tmpMaxAgeMs: Number(env('MEDIA_TMP_MAX_AGE', String(2 * 60 * 60 * 1000))),
       offlineGraceMs: 2 * 60 * 1000
     }
   }

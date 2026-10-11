@@ -4,6 +4,7 @@ import path from 'node:path'
 import { nanoid } from '../common/ids'
 import { Config, CONFIG } from '../config'
 import { DB, Db, MediaJobStatus } from '../db/database'
+import { DirectStorage, FILE_STORAGE, FileStorage, isDirectStorage } from '../files/storage'
 import { OperationsService } from '../operations/operations.service'
 import { Relay } from '../realtime/relay'
 import { spaceUrl } from '../spaces/space-data'
@@ -54,6 +55,15 @@ const FINAL: MediaJobStatus[] = ['done', 'failed', 'canceled']
 const WITH_WORKER: MediaJobStatus[] = ['downloading', 'transcribing', 'summarizing']
 const SWEEP_MS = 10 * 60 * 1000
 const SUMMARY_CARD_WIDTH = 360
+/**
+ * Media in the bucket lives under this prefix. The leading dot keeps it out of
+ * GET /files/* (keys.ts only accepts `<id>/<filename>`).
+ */
+const MEDIA_PREFIX = '.media/'
+/** How long the browser's signed upload link works. */
+export const DIRECT_UPLOAD_TTL_S = 60 * 60
+/** How long the worker's signed download link works. */
+const DIRECT_DOWNLOAD_TTL_S = 30 * 60
 
 export class MediaError extends Error {
   constructor (readonly status: number, message: string, readonly details?: string[]) { super(message) }
@@ -83,8 +93,18 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     private readonly ops: OperationsService,
     private readonly relay: Relay,
     private readonly hub: WorkerHub,
-    private readonly cardEvents: CardEvents
-  ) {}
+    private readonly cardEvents: CardEvents,
+    @Inject(FILE_STORAGE) storage: FileStorage
+  ) {
+    this.bucket = isDirectStorage(storage) ? storage : undefined
+  }
+
+  /**
+   * Set when files go to the bucket: the browser then uploads media straight
+   * to it with a signed link (Railway's proxy cuts request bodies off after
+   * 5 minutes), and the worker downloads it the same way.
+   */
+  readonly bucket?: DirectStorage
 
   async onModuleInit (): Promise<void> {
     await fs.promises.mkdir(this.config.media.tmpDir, { recursive: true })
@@ -111,6 +131,36 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
 
   tmpPath (jobId: string): string {
     return path.join(this.config.media.tmpDir, jobId)
+  }
+
+  bucketKey (jobId: string): string {
+    return `${MEDIA_PREFIX}${jobId}`
+  }
+
+  /** A signed link the browser PUTs the file to. */
+  async directUploadUrl (job: Job): Promise<string> {
+    if (!this.bucket) throw new MediaError(404, 'direct uploads need the bucket')
+    return await this.bucket.presignPut(this.bucketKey(job.id), job.mimeType, DIRECT_UPLOAD_TTL_S)
+  }
+
+  /** The browser says its direct upload finished: check the file is there and queue the job. */
+  async directUploadDone (jobId: string, userId: string): Promise<void> {
+    const job = await this.jobForUser(jobId, userId)
+    if (!this.bucket) throw new MediaError(404, 'direct uploads need the bucket')
+    if (job.status !== 'uploading') throw new MediaError(409, `the job is ${job.status}`)
+    const info = await this.bucket.head(this.bucketKey(jobId))
+    if (!info) throw new MediaError(400, 'the file has not arrived')
+    if (info.size > this.config.media.maxBytes) {
+      await this.uploadFailed(jobId, 'the file is too large')
+      throw new MediaError(413, `files can't be larger than ${Math.floor(this.config.media.maxBytes / 1024 / 1024)} MB`)
+    }
+    await this.uploadDone(jobId, info.size)
+  }
+
+  /** Where the worker gets the file: a signed bucket link, or undefined for the temp disk. */
+  async workerDownloadUrl (job: Job): Promise<string | undefined> {
+    if (!this.bucket || !await this.bucket.head(this.bucketKey(job.id))) return undefined
+    return await this.bucket.presignGet(this.bucketKey(job.id), DIRECT_DOWNLOAD_TTL_S)
   }
 
   // --- client side ---
@@ -400,6 +450,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     for (const name of await fs.promises.readdir(this.config.media.tmpDir)) {
       await fs.promises.rm(path.join(this.config.media.tmpDir, name), { force: true, recursive: true })
     }
+    await this.sweepBucket(new Set())
   }
 
   /** Fail jobs whose file waited too long, and delete any file no live job owns. */
@@ -418,11 +469,29 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     for (const name of await fs.promises.readdir(this.config.media.tmpDir)) {
       if (!live.has(name)) await fs.promises.rm(path.join(this.config.media.tmpDir, name), { force: true, recursive: true })
     }
+    await this.sweepBucket(live)
     if (stale.length) await this.dispatch()
+  }
+
+  /** Delete media in the bucket that no live job owns (e.g. an upload that finished after a cancel). */
+  private async sweepBucket (live: Set<string>): Promise<void> {
+    if (!this.bucket) return
+    try {
+      for (const key of await this.bucket.list(MEDIA_PREFIX)) {
+        if (!live.has(key.slice(MEDIA_PREFIX.length))) await this.bucket.delete(key)
+      }
+    } catch (err) {
+      this.log.warn(`could not sweep media in the bucket: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   private async deleteTmp (jobId: string): Promise<void> {
     await fs.promises.rm(this.tmpPath(jobId), { force: true })
+    if (!this.bucket) return
+    // the worker may already have it; a failed delete is retried by the sweep
+    await this.bucket.delete(this.bucketKey(jobId)).catch(err => {
+      this.log.warn(`could not delete media for job ${jobId}: ${err instanceof Error ? err.message : String(err)}`)
+    })
   }
 
   private async job (id: string): Promise<Job | undefined> {

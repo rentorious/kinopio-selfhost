@@ -1,9 +1,9 @@
 diff --git a/src/components/dialogs/MediaSummary.vue b/src/components/dialogs/MediaSummary.vue
 new file mode 100644
-index 0000000..4852f59
+index 0000000..d42ef92
 --- /dev/null
 +++ b/src/components/dialogs/MediaSummary.vue
-@@ -0,0 +1,367 @@
+@@ -0,0 +1,418 @@
 +<script setup>
 +// kinopio-selfhost: the Media summary dialog (docs/MEDIA-SUMMARIES.md §2, §11 in kinopio-selfhost).
 +// Preview a dropped audio or video file, pick the part to process, then send it to
@@ -240,33 +240,84 @@ index 0000000..4852f59
 +  uploadStore.addPendingUpload({ key: `media-summary/${cardId}`, fileName: selected.name, cardId })
 +  const finishProgress = () => uploadStore.updatePendingUpload({ cardId, percentComplete: 100 })
 +
-+  const form = new FormData()
 +  const fields = { spaceId, cardId, fileName: selected.name, startMs, endMs, language, topic, x: Math.round(position.x), y: Math.round(position.y) }
-+  Object.keys(fields).forEach(key => form.append(key, String(fields[key])))
-+  form.append('file', selected)
-+
-+  const request = new XMLHttpRequest()
-+  request.upload.onprogress = (event) => {
-+    if (!event.lengthComputable) { return }
-+    const percentComplete = Math.min(99, Math.floor(event.loaded / event.total * 100))
-+    uploadStore.updatePendingUpload({ cardId, percentComplete })
-+  }
-+  request.onload = () => {
++  const fail = (message) => {
 +    finishProgress()
-+    if (request.status === 202) { return } // the server updates the card from here on
-+    let message = `upload failed (${request.status})`
-+    try {
-+      message = JSON.parse(request.responseText).message || message
-+    } catch (error) {}
 +    showError(cardId, selected.name, message)
 +  }
-+  request.onerror = () => {
-+    finishProgress()
-+    showError(cardId, selected.name, 'the upload was interrupted')
++  const send = ({ method, url, headers = {}, body }) => {
++    const request = new XMLHttpRequest()
++    const done = new Promise((resolve, reject) => {
++      request.onload = () => resolve(request)
++      request.onerror = () => reject(new Error('the upload was interrupted'))
++    })
++    request.upload.onprogress = (event) => {
++      if (!event.lengthComputable) { return }
++      const percentComplete = Math.min(99, Math.floor(event.loaded / event.total * 100))
++      uploadStore.updatePendingUpload({ cardId, percentComplete })
++    }
++    request.open(method, url)
++    Object.keys(headers).forEach(key => request.setRequestHeader(key, headers[key]))
++    request.send(body)
++    return done
 +  }
-+  request.open('POST', `${consts.apiHost()}/media-summaries`)
-+  if (userStore.apiKey) { request.setRequestHeader('Authorization', userStore.apiKey) }
-+  request.send(form)
++  const errorMessage = (request) => {
++    try {
++      return JSON.parse(request.responseText).message || `upload failed (${request.status})`
++    } catch (error) {
++      return `upload failed (${request.status})`
++    }
++  }
++  const auth = userStore.apiKey ? { Authorization: userStore.apiKey } : {}
++
++  // Straight to the bucket with a signed link: Railway's proxy cuts request
++  // bodies off after 5 minutes, too short for a long video on a home connection.
++  // Without a bucket (local development) the server takes the file itself.
++  const uploadDirect = async () => {
++    const response = await fetch(`${consts.apiHost()}/media-summaries/direct`, {
++      method: 'POST',
++      headers: { 'Content-Type': 'application/json', ...auth },
++      body: JSON.stringify({ ...fields, mimeType: selected.type, size: selected.size })
++    })
++    const body = await response.json().catch(() => ({}))
++    if (response.status === 404 && body.error === 'direct_unsupported') { return false }
++    if (!response.ok) { throw new Error(body.message || `upload failed (${response.status})`) }
++    const { jobId, url, method, headers } = body
++    let put
++    try {
++      put = await send({ method, url, headers, body: selected })
++    } catch (error) {
++      fetch(`${consts.apiHost()}/media-summaries/${jobId}`, { method: 'DELETE', headers: auth }).catch(() => {})
++      throw error
++    }
++    if (put.status < 200 || put.status >= 300) {
++      fetch(`${consts.apiHost()}/media-summaries/${jobId}`, { method: 'DELETE', headers: auth }).catch(() => {})
++      throw new Error(`upload failed (${put.status})`)
++    }
++    const confirmed = await fetch(`${consts.apiHost()}/media-summaries/${jobId}/uploaded`, { method: 'POST', headers: auth })
++    if (confirmed.status !== 202) {
++      const error = await confirmed.json().catch(() => ({}))
++      throw new Error(error.message || `upload failed (${confirmed.status})`)
++    }
++    return true
++  }
++  const uploadThroughServer = async () => {
++    const form = new FormData()
++    Object.keys(fields).forEach(key => form.append(key, String(fields[key])))
++    form.append('file', selected)
++    const request = await send({ method: 'POST', url: `${consts.apiHost()}/media-summaries`, headers: auth, body: form })
++    if (request.status !== 202) { throw new Error(errorMessage(request)) }
++  }
++
++  const upload = async () => {
++    try {
++      if (!await uploadDirect()) { await uploadThroughServer() }
++      finishProgress() // the server updates the card from here on
++    } catch (error) {
++      fail(error.message || 'the upload failed')
++    }
++  }
++  upload()
 +}
 +
 +const showError = (cardId, fileName, message) => {

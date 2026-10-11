@@ -9,9 +9,10 @@ Milestone **M2b**: after the websocket relay (M2), before M3. **Built.** Setting
 | Where the work runs | A **worker on the home PC** (AMD GPU): whisper.cpp with Vulkan for speech-to-text, a headless Claude Code session for the summary | Railway has no GPU. The PC is always on, already runs whisper.cpp on its GPU, and is logged in to Claude Code. |
 | How the worker connects | **Outbound only**: the worker opens a websocket to the server and pulls files over HTTPS | No port forwarding, which keeps SPEC §2's "no home-server networking". The server always knows whether the worker is online. |
 | Transcript | A **linked transcript space**: one card per section, with timestamps | Cards cap at 4,000 characters (`consts.cardCharacterLimit`); an hour of speech is ~50,000. A space keeps it native: editable, and searchable once M3 search lands. |
-| Trimming | **On the worker** with ffmpeg; the browser uploads the whole file plus the chosen range | Files are up to ~250 MB, which is fine to upload. No ffmpeg.wasm in the client. |
+| Trimming | **On the worker** with ffmpeg; the browser uploads the whole file plus the chosen range | Files are up to ~300 MB. No ffmpeg.wasm in the client. |
+| Upload path | **Straight to the bucket** with a signed PUT link that works for 60 minutes; the worker downloads it the same way | Railway's proxy cuts request bodies off after 5 minutes, which a long video on a home connection doesn't beat. Without a bucket (local dev) the file goes through the server as a form. |
 | Summary format | **Abstract + key points** on the card | Both were wanted. |
-| Media storage | **Never stored**: server temp disk until the worker has it, worker temp folder until the job ends | Hard requirement. See §6. |
+| Media storage | **Never kept**: in the bucket under `.media/` until the worker has it, worker temp folder until the job ends | See §6. |
 | Worker offline | The client **checks first and blocks**; no queueing for later | Queueing would leave the media sitting on the server. Open question 1. |
 
 ## 2. User flow
@@ -82,10 +83,11 @@ The file and the result go over HTTP, not the socket (the file can be 250 MB):
 
 **Client side:** `GET /api/media-summaries/status` returns `{ online, lastSeenAt, busy, queued, model }`. The dialog calls it when it opens and every 10 s while it's open.
 
-## 6. The media file is never stored
+## 6. The media file is never kept
 
-- The server writes it only to `MEDIA_TMP_DIR/<jobId>` (the container's ephemeral disk), never to the bucket or the database.
-- The server deletes its copy when the worker sends `downloaded`, and when the job fails or is canceled. A sweep catches anything left over: on boot it deletes everything and marks unfinished jobs failed; every 10 minutes it deletes anything older than `MEDIA_TMP_MAX_AGE` (default 1 h).
+- With a bucket, the browser uploads it to `.media/<jobId>` in the bucket with a signed PUT link (60 minutes), then calls `POST /api/media-summaries/:id/uploaded`. The worker's `GET /api/worker/jobs/:id/media` redirects to a signed GET link (30 minutes). The leading dot keeps these keys out of `GET /files/*`. Without a bucket, the server writes the file to `MEDIA_TMP_DIR/<jobId>` (the container's ephemeral disk). Never the database.
+- The browser's PUT needs a CORS rule on the bucket allowing `PUT` from the app's origin: `tools/bucket-cors.mjs` sets it (DEPLOY.md §6).
+- The server deletes its copy when the worker sends `downloaded`, and when the job fails or is canceled. A sweep catches anything left over: on boot it deletes everything and marks unfinished jobs failed; every 10 minutes it fails jobs still uploading or waiting after `MEDIA_TMP_MAX_AGE` (default 2 h) and deletes any media no live job owns, on disk and under `.media/`.
 - The worker keeps everything in `JOB_DIR/<jobId>/` and deletes the folder in a `finally` when the job ends, success or not.
 - Logs carry file names and sizes, never contents.
 - What *is* kept: the transcript text and the summary. They're the result.
@@ -203,15 +205,17 @@ These are our own endpoints, not part of the client's API list (ENDPOINTS.md).
 | Endpoint | Body | Response |
 |---|---|---|
 | `GET /api/media-summaries/status` | — | `{ online, lastSeenAt, busy, queued, model }` |
-| `POST /api/media-summaries` | Multipart: `spaceId`, `cardId`, `fileName`, `startMs`, `endMs`, `language`, `topic`, `x`, `y`, then `file` | `202 { jobId }` |
+| `POST /api/media-summaries/direct` | JSON: the form fields below plus `mimeType` and `size` | `200 { jobId, url, method: 'PUT', headers }`: PUT the file to `url` with those headers. `404 { "error": "direct_unsupported" }` without a bucket |
+| `POST /api/media-summaries/:id/uploaded` | — | `202 { jobId }` once the file is in the bucket; `400` if it isn't, `413` if it's too big, `409` if the job isn't uploading |
+| `POST /api/media-summaries` | Multipart (no bucket): `spaceId`, `cardId`, `fileName`, `startMs`, `endMs`, `language`, `topic`, `x`, `y`, then `file` | `202 { jobId }` |
 | `GET /api/media-summaries/:id` | — | `{ status, percent, error }` |
 | `DELETE /api/media-summaries/:id` | — | `200 {}`; sends the worker `cancel` |
 
-`POST` checks, all made before reading the file so a rejected upload stops early:
+Both upload paths check, before any file is sent:
 
 - Signed in, and allowed to edit `spaceId`.
 - Worker online, else `503 { "error": "transcriber_offline" }`.
-- Size under `MEDIA_MAX_BYTES` (default 300 MB), checked against `Content-Length` and again while streaming, else `413`; selected range under `MEDIA_MAX_MINUTES` (default 180), else `400`.
+- Size under `MEDIA_MAX_BYTES` (default 300 MB), else `413`: the declared `size` and the file in the bucket for direct uploads, `Content-Length` and the stream for the form; selected range under `MEDIA_MAX_MINUTES` (default 180), else `400`.
 - MIME type `audio/*` or `video/*`, else `415`. The worker's `ffprobe` is the real check.
 
 A `removeCard` or `deleteCard` in `POST /operations` for a card with a running job cancels that job.
@@ -223,7 +227,7 @@ Two small hooks plus new files, so bumping the client rarely conflicts:
 - **Hook 1:** `uploadStore.addCardsAndUploadFiles`. Drops on the canvas and on connections, keyboard paste and the image picker all go through it. If it gets exactly one file whose type starts with `audio/` or `video/`, it opens the dialog with `{ file, position }` and returns. An `asFile` flag skips the check for **Upload as file**. Dropping a file onto an existing card (`Card.vue`, `uploadStore.uploadFile`) attaches it to that card and stays a normal upload.
 - **Hook 2:** mount the dialog in `Space.vue`, next to the other space dialogs.
 - **New files:** `stores/useMediaSummaryStore.js` (open/close with `{ file, position }`) and `components/dialogs/MediaSummary.vue` (status, `<video>`/`<audio>` on an object URL, start/end, language, topic hint). The dialog calls the §10 endpoints itself; there's no separate API helper.
-- **Upload:** create the placeholder card with `consts.uploadPlaceholder`, then send the form by XHR. Progress goes through `addPendingUpload` (keyed by card id, **without** `spaceId`) and `updatePendingUpload`, so the card shows the usual progress bar. On load or error it's set to 100%, which is what clears the bar: the client's `removePendingUpload` keeps entries that carry the current `spaceId`, so a pending upload with one would stay at 99% forever.
+- **Upload:** create the placeholder card with `consts.uploadPlaceholder`, then ask for a direct upload, PUT the file to the bucket by XHR and confirm it; on `direct_unsupported`, send the form by XHR instead. If the PUT fails the dialog cancels the job. Progress goes through `addPendingUpload` (keyed by card id, **without** `spaceId`) and `updatePendingUpload`, so the card shows the usual progress bar. On load or error it's set to 100%, which is what clears the bar: the client's `removePendingUpload` keeps entries that carry the current `spaceId`, so a pending upload with one would stay at 99% forever.
 - Upload or job errors turn the card into `⚠️ name · reason` and show a notification.
 - Revoke the object URL when the dialog closes.
 
@@ -281,7 +285,7 @@ There's no file path column: the temp file is always `MEDIA_TMP_DIR/<id>`.
 | Server | `MEDIA_TMP_DIR` | `<os tmpdir>/media-jobs` | Ephemeral disk |
 | Server | `MEDIA_MAX_BYTES` | `314572800` (300 MB) | |
 | Server | `MEDIA_MAX_MINUTES` | `180` | Length of the selected range |
-| Server | `MEDIA_TMP_MAX_AGE` | `3600000` (1 h) | Sweep cutoff |
+| Server | `MEDIA_TMP_MAX_AGE` | `7200000` (2 h) | Sweep cutoff; longer than the 60-minute upload link |
 | Worker | `SERVER_URL`, `WORKER_TOKEN` | — | Required |
 | Worker | `WHISPER_BIN`, `WHISPER_MODEL` | `whisper-cli`, — | Paths from the whisper.cpp Vulkan build; the model is required |
 | Worker | `WHISPER_FALLBACK_MODEL`, `VAD_MODEL`, `WHISPER_THREADS` | — | Optional |

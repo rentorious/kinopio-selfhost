@@ -27,6 +27,23 @@ export interface FileStorage {
   delete (key: string): Promise<void>
 }
 
+/**
+ * A storage the browser and the worker can reach directly with signed links
+ * (the bucket). Media summaries use it so a long upload doesn't go through
+ * Railway's proxy, which cuts request bodies off after 5 minutes.
+ */
+export interface DirectStorage extends FileStorage {
+  /** A signed PUT link; the uploader must send exactly this Content-Type. */
+  presignPut (key: string, contentType: string, expiresInSeconds: number): Promise<string>
+  presignGet (key: string, expiresInSeconds: number): Promise<string>
+  /** Every key under a prefix. */
+  list (prefix: string): Promise<string[]>
+}
+
+export function isDirectStorage (storage: FileStorage): storage is DirectStorage {
+  return typeof (storage as Partial<DirectStorage>).presignPut === 'function'
+}
+
 export const FILE_STORAGE = Symbol('FILE_STORAGE')
 
 export function createStorage (config: Config['files']): FileStorage {

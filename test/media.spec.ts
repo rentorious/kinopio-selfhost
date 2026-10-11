@@ -1,7 +1,10 @@
 import fs from 'node:fs'
 import type { AddressInfo } from 'node:net'
+import { Readable } from 'node:stream'
 import { WebSocket } from 'ws'
 import type { MediaResult } from '../src/media/contract'
+import { LocalStorage } from '../src/files/local-storage'
+import type { DirectStorage } from '../src/files/storage'
 import { MediaService } from '../src/media/media.service'
 import { setup, op, TestContext } from './helpers'
 
@@ -51,6 +54,17 @@ function open (url: string, headers: Record<string, string> = {}): Promise<Inbox
 
 const VIDEO = Buffer.from('not really a video, but bytes are bytes')
 
+/** The bucket, on disk: signed links are fake URLs, and the test plays the browser. */
+class FakeBucket extends LocalStorage implements DirectStorage {
+  constructor (private readonly root = fs.mkdtempSync('/tmp/kinopio-bucket-')) { super(root) }
+  async presignPut (key: string, contentType: string, expiresInSeconds: number) { return `https://bucket.test/${key}?put&type=${contentType}&ttl=${expiresInSeconds}` }
+  async presignGet (key: string, expiresInSeconds: number) { return `https://bucket.test/${key}?get&ttl=${expiresInSeconds}` }
+  async list (prefix: string) {
+    const dir = `${this.root}/${prefix}`
+    return fs.existsSync(dir) ? fs.readdirSync(dir).map(name => `${prefix}${name}`) : []
+  }
+}
+
 describe('media summaries', () => {
   let t: TestContext
   let base: string
@@ -62,8 +76,8 @@ describe('media summaries', () => {
   const auth = (u: { apiKey: string }) => ({ Authorization: u.apiKey })
   const media = () => t.app.get(MediaService)
 
-  async function start (overrides: Json = {}) {
-    t = await setup(overrides)
+  async function start (overrides: Json = {}, storage?: DirectStorage) {
+    t = await setup(overrides, storage)
     await t.app.listen(0, '127.0.0.1')
     base = `127.0.0.1:${(t.app.getHttpServer().address() as AddressInfo).port}`
     const a = await t.users.createUser({ email: 'me@x.com', password: 'pw', withInbox: true })
@@ -306,6 +320,78 @@ describe('media summaries', () => {
       const w = await worker()
       w.send({ type: 'progress', jobId: 'someOtherJob', stage: 'transcribing', percent: 5 })
       expect(await w.next(m => m.type === 'cancel')).toEqual({ type: 'cancel', jobId: 'someOtherJob' })
+    })
+  })
+
+  describe('direct uploads to the bucket', () => {
+    let bucket: FakeBucket
+    const fields = (extra: Json = {}) => ({ spaceId, cardId, fileName: 'lecture.mp4', startMs: 0, endMs: 600000, language: 'en', topic: '', x: 300, y: 200, mimeType: 'video/mp4', size: VIDEO.length, ...extra })
+    const putFile = async (jobId: string, content = VIDEO) => { await bucket.put(`.media/${jobId}`, Readable.from([content]), 'video/mp4') }
+    beforeEach(async () => {
+      bucket = new FakeBucket()
+      await start({}, bucket)
+    })
+
+    it('hands out an hour-long upload link, queues the job once the file is there, and sends the worker to the bucket', async () => {
+      const w = await worker()
+      const res = await t.http().post('/api/media-summaries/direct').set(auth(me)).send(fields()).expect(200)
+      const { jobId, url, method, headers } = res.body
+      expect(url).toBe(`https://bucket.test/.media/${jobId}?put&type=video/mp4&ttl=3600`)
+      expect({ method, headers }).toEqual({ method: 'PUT', headers: { 'Content-Type': 'video/mp4' } })
+      expect(await jobStatus(jobId)).toMatchObject({ status: 'uploading' })
+
+      await t.http().post(`/api/media-summaries/${jobId}/uploaded`).set(auth(me)).expect(400)
+      await t.http().post(`/api/media-summaries/${jobId}/uploaded`).set(auth(other)).expect(404)
+      await putFile(jobId)
+      await t.http().post(`/api/media-summaries/${jobId}/uploaded`).set(auth(me)).expect(202)
+
+      const offer = await w.next(m => m.type === 'job')
+      expect(offer.job).toMatchObject({ jobId, bytes: VIDEO.length })
+      const dl = await t.http().get(offer.job.mediaPath).set('Authorization', 'Bearer test-worker-token').redirects(0).expect(302)
+      expect(dl.headers.location).toBe(`https://bucket.test/.media/${jobId}?get&ttl=1800`)
+      expect(tmpFiles()).toEqual([])
+
+      w.send({ type: 'downloaded', jobId })
+      await waitFor(async () => (await jobStatus(jobId)).status === 'transcribing')
+      expect(await bucket.list('.media/')).toEqual([])
+    })
+
+    it('checks the request before handing out a link', async () => {
+      await worker()
+      const post = (extra: Json) => t.http().post('/api/media-summaries/direct').set(auth(me)).send(fields(extra))
+      await post({ size: 6 * 1024 * 1024 }).expect(413)
+      await post({ mimeType: 'application/pdf' }).expect(415)
+      await post({ size: undefined }).expect(400)
+      await post({ cardId: undefined }).expect(400)
+      await t.http().post('/api/media-summaries/direct').set(auth(other)).send(fields()).expect(401)
+      expect(await bucket.list('.media/')).toEqual([])
+    })
+
+    it('fails a job whose file turns out too big, and sweeps files no live job owns', async () => {
+      await t.close()
+      await start({ media: { workerToken: 'test-worker-token', tmpDir: fs.mkdtempSync('/tmp/kinopio-media-'), maxBytes: 64, maxMinutes: 180, tmpMaxAgeMs: 3_600_000, offlineGraceMs: 120_000 } }, bucket)
+      await worker()
+      const jobId = (await t.http().post('/api/media-summaries/direct').set(auth(me)).send(fields()).expect(200)).body.jobId
+      await putFile(jobId, Buffer.alloc(100))
+      await t.http().post(`/api/media-summaries/${jobId}/uploaded`).set(auth(me)).expect(413)
+      expect(await jobStatus(jobId)).toMatchObject({ status: 'failed', error: 'the file is too large' })
+      expect(await bucket.list('.media/')).toEqual([])
+
+      // canceled while uploading; the upload lands afterwards
+      const late = (await t.http().post('/api/media-summaries/direct').set(auth(me)).send(fields()).expect(200)).body.jobId
+      await t.http().delete(`/api/media-summaries/${late}`).set(auth(me)).expect(200)
+      await putFile(late)
+      await t.http().post(`/api/media-summaries/${late}/uploaded`).set(auth(me)).expect(409)
+      await media().sweep()
+      expect(await bucket.list('.media/')).toEqual([])
+    })
+
+    it('is not offered without a bucket', async () => {
+      await t.close()
+      await start()
+      await worker()
+      const res = await t.http().post('/api/media-summaries/direct').set(auth(me)).send(fields()).expect(404)
+      expect(res.body.error).toBe('direct_unsupported')
     })
   })
 

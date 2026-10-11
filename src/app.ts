@@ -9,7 +9,7 @@ import { clientStatic } from './common/client-static'
 import { Config } from './config'
 import { Db } from './db/database'
 import { filesRouter } from './files/files-router'
-import { createStorage } from './files/storage'
+import { createStorage, FileStorage } from './files/storage'
 import { stubRouter } from './stubs/stubs'
 import { WorkerHub } from './media/worker-hub'
 import { Relay } from './realtime/relay'
@@ -21,8 +21,8 @@ import { routeUpgrades } from './realtime/upgrades'
  * routes (/api) → client static files and SPA fallback. Websocket upgrades
  * are routed by path (realtime/upgrades.ts).
  */
-export async function createApp (config: Config, db: Db, opts: { logger?: false } = {}): Promise<INestApplication> {
-  const storage = createStorage(config.files)
+export async function createApp (config: Config, db: Db, opts: { logger?: false, storage?: FileStorage } = {}): Promise<INestApplication> {
+  const storage = opts.storage ?? createStorage(config.files)
   const app = await NestFactory.create<NestExpressApplication>(AppModule.register(config, db, storage), {
     bodyParser: false,
     logger: opts.logger === false ? false : ['log', 'warn', 'error']

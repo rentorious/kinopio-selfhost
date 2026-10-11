@@ -7,6 +7,7 @@ import { sql } from 'kysely'
 import request from 'supertest'
 import { createApp } from '../src/app'
 import { Config } from '../src/config'
+import type { FileStorage } from '../src/files/storage'
 import { createDb, Db } from '../src/db/database'
 import { migrate } from '../src/db/migrate'
 import { SpacesService } from '../src/spaces/spaces.service'
@@ -50,12 +51,12 @@ export interface TestContext {
   close: () => Promise<void>
 }
 
-export async function setup (overrides: Partial<Config> = {}): Promise<TestContext> {
+export async function setup (overrides: Partial<Config> = {}, storage?: FileStorage): Promise<TestContext> {
   const config = testConfig(overrides)
   const db = createDb(config.databaseUrl, false)
   await migrate(db, () => undefined)
   await sql`truncate users, spaces, items, applied_operations, media_jobs cascade`.execute(db)
-  const app = await createApp(config, db, { logger: false })
+  const app = await createApp(config, db, { logger: false, storage })
   const users = new UsersService(db, config, new SpacesService(db))
   return {
     app,
