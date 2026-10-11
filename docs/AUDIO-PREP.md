@@ -1,6 +1,6 @@
 # Audio prep in the browser
 
-Milestone **M2c**, on top of M2b (MEDIA-SUMMARIES.md). **Planned, not built.**
+Milestone **M2c**, on top of M2b (MEDIA-SUMMARIES.md). **Built** (PRs #5 and #6). The open question in §4 is answered: Mediabunny's trimmed output starts at timestamp 0, so `fileOffsetMs` is the selected start.
 
 Before uploading, the browser cuts the selected range out of the dropped file and keeps only the audio, re-encoded as mono Opus. A one-hour lecture video goes from ~300 MB to ~20 MB, so the upload takes seconds instead of many minutes. Transcription and the summary stay on the PC worker.
 

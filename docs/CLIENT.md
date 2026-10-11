@@ -47,9 +47,9 @@ Two places hardcode `https://kinopio.club/`, so links to spaces on our domain go
 
 The link chip's name comes from `POST /api/item/multiple`, implemented in M2b for the same reason.
 
-## Patch 4: media summary dialog (done, M2b)
+## Patch 4: media summary dialog (done, M2b; audio prep M2c)
 
-`client/patches/0004-selfhost-media-summary-dialog.patch`. Dropping or pasting a single audio or video file opens our own dialog (preview, trim, language, topic hint) instead of uploading it. Two small hooks, in `uploadStore.addCardsAndUploadFiles` (an `asFile` flag for **Upload as file**) and `Space.vue` (mounts the dialog), plus two new files: `stores/useMediaSummaryStore.js` and `components/dialogs/MediaSummary.vue`. Details in MEDIA-SUMMARIES.md §11.
+`client/patches/0004-selfhost-media-summary-dialog.patch`. Dropping or pasting a single audio or video file opens our own dialog (preview, trim, language, topic hint) instead of uploading it. Two small hooks, in `uploadStore.addCardsAndUploadFiles` (an `asFile` flag for **Upload as file**) and `Space.vue` (mounts the dialog), plus two new files: `stores/useMediaSummaryStore.js` and `components/dialogs/MediaSummary.vue`. Since M2c a third, `media/prepareAudio.worker.js`, cuts the selection and keeps only its audio before upload (AUDIO-PREP.md). Details in MEDIA-SUMMARIES.md §11.
 
 Verified in Chromium against the real worker: the dialog, trimming, the upload progress bar, live stage text on two devices, the summary card and its transcript space link, and the offline state.
 
@@ -59,7 +59,7 @@ Verified in Chromium against the real worker: the dialog, trimming, the upload p
 npm run client:build        # = bash client/build.sh → ./client-dist
 ```
 
-`client/build.sh` fetches the pinned commit, applies every patch in `client/patches/`, runs `npm ci` and `VITE_SELFHOST=true npm run build`, and copies the result plus the license and notice into `client-dist/`. The Dockerfile runs the same script in its first stage. Verified: about 40 s with a warm npm cache, 17 MB of static output.
+`client/build.sh` fetches the pinned commit, applies every patch in `client/patches/`, runs `npm ci`, installs `mediabunny` (pinned in `MEDIABUNNY`, `--no-save` so the client's lockfile stays untouched), runs `VITE_SELFHOST=true npm run build`, and copies the result plus the license and notice into `client-dist/`. The Dockerfile runs the same script in its first stage. Verified: about 40 s with a warm npm cache, 17 MB of static output.
 
 ## Serve
 
