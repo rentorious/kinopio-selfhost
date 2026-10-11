@@ -1,9 +1,9 @@
 diff --git a/src/components/dialogs/MediaSummary.vue b/src/components/dialogs/MediaSummary.vue
 new file mode 100644
-index 0000000..d42ef92
+index 0000000..4a1975b
 --- /dev/null
 +++ b/src/components/dialogs/MediaSummary.vue
-@@ -0,0 +1,418 @@
+@@ -0,0 +1,492 @@
 +<script setup>
 +// kinopio-selfhost: the Media summary dialog (docs/MEDIA-SUMMARIES.md §2, §11 in kinopio-selfhost).
 +// Preview a dropped audio or video file, pick the part to process, then send it to
@@ -33,6 +33,8 @@ index 0000000..d42ef92
 +
 +const LANGUAGE_KEY = 'kinopio-selfhost-media-language'
 +const MAX_MS = 180 * 60 * 1000
++// already small: an audio file this size, with all of it selected, is uploaded as is
++const PREP_SKIP_BYTES = 25 * 1024 * 1024
 +const LANGUAGES = ['auto', 'en', 'sl', 'sr', 'hr', 'bs', 'it', 'de', 'fr', 'es', 'pt', 'nl', 'pl', 'cs', 'ru', 'uk', 'ja', 'zh']
 +
 +const mediaElement = ref(null)
@@ -48,7 +50,7 @@ index 0000000..d42ef92
 +  endText: '',
 +  language: 'auto',
 +  topic: '',
-+  status: null, // { online, lastSeenAt, model }
++  status: null, // { online, prepared, lastSeenAt, model }
 +  statusError: false
 +})
 +
@@ -230,17 +232,19 @@ index 0000000..d42ef92
 +  const endMs = state.endMs
 +  const language = state.language
 +  const topic = state.topic.trim()
++  const prepared = Boolean(state.status?.prepared)
++  const wholeFile = startMs === 0 && state.durationMs !== null && endMs >= state.durationMs
++  const alreadySmall = (selected.type || '').startsWith('audio/') && selected.size <= PREP_SKIP_BYTES && wholeFile
 +  close()
 +
 +  const cardId = nanoid()
 +  const spaceId = spaceStore.id
 +  const highestCardZ = utils.highestItemZ(cardStore.getAllCards)
 +  cardStore.createCard({ position: { x: position.x, y: position.y, z: highestCardZ }, name: consts.uploadPlaceholder, id: cardId }, true)
-+  // the card's usual upload progress bar; like card uploads, keyed by card only
-+  uploadStore.addPendingUpload({ key: `media-summary/${cardId}`, fileName: selected.name, cardId })
++  // the file that's uploaded: the original, or only the selected part's audio
++  let uploadFile = selected
++  let fileOffsetMs = 0
 +  const finishProgress = () => uploadStore.updatePendingUpload({ cardId, percentComplete: 100 })
-+
-+  const fields = { spaceId, cardId, fileName: selected.name, startMs, endMs, language, topic, x: Math.round(position.x), y: Math.round(position.y) }
 +  const fail = (message) => {
 +    finishProgress()
 +    showError(cardId, selected.name, message)
@@ -277,7 +281,7 @@ index 0000000..d42ef92
 +    const response = await fetch(`${consts.apiHost()}/media-summaries/direct`, {
 +      method: 'POST',
 +      headers: { 'Content-Type': 'application/json', ...auth },
-+      body: JSON.stringify({ ...fields, mimeType: selected.type, size: selected.size })
++      body: JSON.stringify({ ...fields(), mimeType: uploadFile.type, size: uploadFile.size })
 +    })
 +    const body = await response.json().catch(() => ({}))
 +    if (response.status === 404 && body.error === 'direct_unsupported') { return false }
@@ -285,7 +289,7 @@ index 0000000..d42ef92
 +    const { jobId, url, method, headers } = body
 +    let put
 +    try {
-+      put = await send({ method, url, headers, body: selected })
++      put = await send({ method, url, headers, body: uploadFile })
 +    } catch (error) {
 +      fetch(`${consts.apiHost()}/media-summaries/${jobId}`, { method: 'DELETE', headers: auth }).catch(() => {})
 +      throw error
@@ -303,13 +307,28 @@ index 0000000..d42ef92
 +  }
 +  const uploadThroughServer = async () => {
 +    const form = new FormData()
-+    Object.keys(fields).forEach(key => form.append(key, String(fields[key])))
-+    form.append('file', selected)
++    const values = fields()
++    Object.keys(values).forEach(key => form.append(key, String(values[key])))
++    form.append('file', uploadFile)
 +    const request = await send({ method: 'POST', url: `${consts.apiHost()}/media-summaries`, headers: auth, body: form })
 +    if (request.status !== 202) { throw new Error(errorMessage(request)) }
 +  }
 +
++  // fileName stays the original's, so the cards say lecture.mp4, not lecture.opus
++  const fields = () => ({ spaceId, cardId, fileName: selected.name, startMs, endMs, fileOffsetMs, language, topic, x: Math.round(position.x), y: Math.round(position.y) })
++
 +  const upload = async () => {
++    if (prepared && !alreadySmall) {
++      const result = await prepareAudio({ file: selected, startMs, endMs, cardId })
++      if (result === 'canceled') { return }
++      if (result) {
++        uploadFile = result.file
++        fileOffsetMs = result.fileOffsetMs
++      }
++      cardStore.updateCard({ id: cardId, name: consts.uploadPlaceholder })
++    }
++    // the card's usual upload progress bar; like card uploads, keyed by card only
++    uploadStore.addPendingUpload({ key: `media-summary/${cardId}`, fileName: selected.name, cardId })
 +    try {
 +      if (!await uploadDirect()) { await uploadThroughServer() }
 +      finishProgress() // the server updates the card from here on
@@ -318,6 +337,61 @@ index 0000000..d42ef92
 +    }
 +  }
 +  upload()
++}
++
++// Cut the selected part out of the file and keep only its audio, as small
++// mono Opus (or AAC), in a Web Worker (docs/AUDIO-PREP.md in kinopio-selfhost).
++// Resolves to { file, fileOffsetMs }; null to upload the original instead;
++// or 'canceled' when the placeholder card was removed meanwhile.
++const prepareAudio = ({ file, startMs, endMs, cardId }) => {
++  return new Promise(resolve => {
++    let worker
++    try {
++      worker = new Worker(new URL('../../media/prepareAudio.worker.js', import.meta.url), { type: 'module' })
++    } catch (error) {
++      console.warn('🚑 audio prep', error)
++      resolve(null)
++      return
++    }
++    const finish = (value) => {
++      worker.terminate()
++      resolve(value)
++    }
++    const fallBack = (reason) => {
++      console.warn('🚑 audio prep', reason)
++      finish(null)
++    }
++    const cardIsGone = () => !cardStore.getCard(cardId)
++    let shownPercent = -1
++    let shownAt = 0
++    worker.onmessage = ({ data }) => {
++      if (cardIsGone()) {
++        worker.postMessage({ cancel: true })
++        setTimeout(() => finish('canceled'), 1000)
++        worker.onmessage = null
++        return
++      }
++      if (data.error) {
++        fallBack(data.error)
++      } else if (data.done) {
++        const name = `${file.name.replace(/\.[^.]+$/, '')}.${data.mimeType === 'audio/ogg' ? 'opus' : 'm4a'}`
++        finish({ file: new File([data.blob], name, { type: data.mimeType }), fileOffsetMs: data.fileOffsetMs })
++      } else if (data.progress !== undefined) {
++        const percent = Math.floor(data.progress * 100)
++        const now = Date.now()
++        if (percent === shownPercent || now - shownAt < 1000) { return }
++        shownPercent = percent
++        shownAt = now
++        cardStore.updateCard({ id: cardId, name: `⏳ ${file.name} · preparing audio ${percent}%` })
++      }
++    }
++    worker.onerror = (event) => {
++      event.preventDefault()
++      fallBack(event.message || 'the worker failed to load')
++    }
++    cardStore.updateCard({ id: cardId, name: `⏳ ${file.name} · preparing audio` })
++    worker.postMessage({ file, startMs, endMs })
++  })
 +}
 +
 +const showError = (cardId, fileName, message) => {
@@ -422,6 +496,93 @@ index 0000000..d42ef92
 +  .selected
 +    opacity 0.8
 +</style>
+diff --git a/src/media/prepareAudio.worker.js b/src/media/prepareAudio.worker.js
+new file mode 100644
+index 0000000..2892d63
+--- /dev/null
++++ b/src/media/prepareAudio.worker.js
+@@ -0,0 +1,81 @@
++// selfhost: cut the selected range out of a dropped media file and keep only
++// the audio, as mono Opus (or AAC), before it's uploaded for a summary.
++// Runs in a Web Worker so the canvas stays responsive (docs/AUDIO-PREP.md).
++//
++// in:  { file, startMs, endMs }, later maybe { cancel: true }
++// out: { progress } (0–1), then { done: true, blob, mimeType, fileOffsetMs } or { error }
++
++import {
++  ALL_FORMATS,
++  BlobSource,
++  BufferSource,
++  BufferTarget,
++  Conversion,
++  ConversionCanceledError,
++  getEncodableAudioCodecs,
++  Input,
++  Mp4OutputFormat,
++  OggOutputFormat,
++  Output
++} from 'mediabunny'
++
++const audio = { numberOfChannels: 1, sampleRate: 48000, bitrate: 48000 }
++const formats = {
++  opus: { format: () => new OggOutputFormat(), mimeType: 'audio/ogg' },
++  aac: { format: () => new Mp4OutputFormat(), mimeType: 'audio/mp4' }
++}
++
++let conversion = null
++let canceled = false
++
++const prepare = async ({ file, startMs, endMs }) => {
++  if (typeof AudioEncoder === 'undefined') throw new Error('no WebCodecs')
++  const [codec] = await getEncodableAudioCodecs(['opus', 'aac'], audio)
++  if (!codec) throw new Error('no encoder')
++  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS })
++  const output = new Output({ format: formats[codec].format(), target: new BufferTarget() })
++  conversion = await Conversion.init({
++    input,
++    output,
++    video: { discard: true },
++    audio: { ...audio, codec },
++    trim: { start: startMs / 1000, end: endMs / 1000 },
++    showWarnings: false
++  })
++  if (!conversion.isValid) {
++    const reasons = conversion.discardedTracks.map(({ track, reason }) => `${track.type}: ${reason}`)
++    throw new Error(`can't convert (${reasons.join(', ') || 'no tracks'})`)
++  }
++  if (canceled) return
++  let percent = -1
++  conversion.onProgress = progress => {
++    // whole percents only: Mediabunny reports many times a second
++    if (Math.floor(progress * 100) === percent) { return }
++    percent = Math.floor(progress * 100)
++    postMessage({ progress })
++  }
++  await conversion.execute()
++  const buffer = output.target.buffer
++  // Mediabunny shifts the trimmed output so it starts at 0: the file's 0 is
++  // the selected start. Check what was actually written rather than trust it.
++  const check = new Input({ source: new BufferSource(buffer), formats: ALL_FORMATS })
++  const firstMs = Math.round(await check.getFirstTimestamp() * 1000)
++  const durationMs = Math.round(await check.computeDuration() * 1000)
++  if (import.meta.env.DEV) console.info('🎧 audio prep output', { codec, bytes: buffer.byteLength, firstMs, durationMs, startMs, endMs })
++  if (Math.abs(firstMs) > 1000) throw new Error(`output starts at ${firstMs} ms, not 0`)
++  postMessage({ done: true, blob: new Blob([buffer], { type: formats[codec].mimeType }), mimeType: formats[codec].mimeType, fileOffsetMs: startMs })
++}
++
++onmessage = async ({ data }) => {
++  if (data.cancel) {
++    canceled = true
++    await conversion?.cancel()
++    return
++  }
++  try {
++    await prepare(data)
++  } catch (error) {
++    if (error instanceof ConversionCanceledError || canceled) return
++    postMessage({ error: error?.message || String(error) })
++  }
++}
 diff --git a/src/stores/useMediaSummaryStore.js b/src/stores/useMediaSummaryStore.js
 new file mode 100644
 index 0000000..010f3b4

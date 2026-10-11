@@ -5,6 +5,9 @@ set -euo pipefail
 
 REPO="${KINOPIO_CLIENT_REPO:-https://github.com/kinopio-club/kinopio-client.git}"
 COMMIT="${KINOPIO_CLIENT_COMMIT:-0394e07b343d076347aaa214edb584e0856c4347}"
+# Audio prep in the browser (docs/AUDIO-PREP.md). Installed on top of the client's
+# own lockfile, so Patch 4 never touches package.json.
+MEDIABUNNY="${MEDIABUNNY_VERSION:-1.61.3}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="$(realpath -m "${1:-$HERE/../client-dist}")"
 WORK="${KINOPIO_CLIENT_WORKDIR:-$HERE/.kinopio-client}"
@@ -22,7 +25,12 @@ for patch in "$HERE"/patches/*.patch; do
   git -C "$WORK" apply "$patch"
 done
 
-(cd "$WORK" && npm ci --no-audit --no-fund --loglevel=error && VITE_SELFHOST=true npm run build)
+(
+  cd "$WORK"
+  npm ci --no-audit --no-fund --loglevel=error
+  npm install --no-save --no-audit --no-fund --loglevel=error "mediabunny@$MEDIABUNNY"
+  VITE_SELFHOST=true npm run build
+)
 
 rm -rf "$OUT"
 cp -r "$WORK/dist" "$OUT"
