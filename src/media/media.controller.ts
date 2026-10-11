@@ -33,8 +33,10 @@ export function parseJobFields (fields: Record<string, string>, maxMinutes: numb
   if (endMs - startMs > maxMinutes * 60_000) return `the selected part can be at most ${maxMinutes} minutes`
   if (!/^(auto|[a-z]{2,3})$/.test(language)) return 'language must be auto or a language code'
   if (topic.length > 500) return 'topic can be at most 500 characters'
+  const fileOffsetMs = fields.fileOffsetMs === undefined || fields.fileOffsetMs === '' ? 0 : Number(fields.fileOffsetMs)
+  if (!Number.isInteger(fileOffsetMs) || fileOffsetMs < 0 || fileOffsetMs > startMs) return 'fileOffsetMs must be whole milliseconds between 0 and startMs'
   const num = (v: string | undefined) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null)
-  return { spaceId, cardId, fileName: name, startMs, endMs, language, topic: topic.trim(), cardX: num(fields.x), cardY: num(fields.y) }
+  return { spaceId, cardId, fileName: name, startMs, endMs, fileOffsetMs, language, topic: topic.trim(), cardX: num(fields.x), cardY: num(fields.y) }
 }
 
 /**
@@ -103,8 +105,8 @@ export class MediaController {
   }
 
   /**
-   * Multipart: spaceId, cardId, fileName, startMs, endMs, language, topic,
-   * x, y, then the file. Everything is checked before the file is read, and
+   * Multipart: spaceId, cardId, fileName, startMs, endMs, fileOffsetMs, language,
+   * topic, x, y, then the file. Everything is checked before the file is read, and
    * the file only ever goes to MEDIA_TMP_DIR.
    */
   @Post()

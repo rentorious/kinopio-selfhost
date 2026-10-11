@@ -9,7 +9,7 @@ import { OperationsService } from '../operations/operations.service'
 import { Relay } from '../realtime/relay'
 import { spaceUrl } from '../spaces/space-data'
 import { CardEvents } from './card-events'
-import { JobOffer, MediaResult, validateResult, WorkerMessage } from './contract'
+import { FEATURE_FILE_OFFSET, JobOffer, MediaResult, validateResult, WorkerMessage } from './contract'
 import { stageText, summaryCardText, transcriptCards } from './texts'
 import { WorkerHub } from './worker-hub'
 
@@ -26,6 +26,8 @@ export interface Job {
   bytes: number | null
   startMs: number
   endMs: number
+  /** Where the uploaded file's 0 sits in the original (docs/AUDIO-PREP.md). */
+  fileOffsetMs: number
   language: string
   topic: string
   status: MediaJobStatus
@@ -47,6 +49,8 @@ export interface NewJob {
   mimeType: string
   startMs: number
   endMs: number
+  /** Where the uploaded file's 0 sits in the original (docs/AUDIO-PREP.md). */
+  fileOffsetMs: number
   language: string
   topic: string
 }
@@ -165,10 +169,13 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
 
   // --- client side ---
 
-  async status (): Promise<{ online: boolean, lastSeenAt: string | null, busy: boolean, queued: number, model: string | null }> {
+  async status (): Promise<{ online: boolean, prepared: boolean, lastSeenAt: string | null, busy: boolean, queued: number, model: string | null }> {
     const queued = await this.db.selectFrom('media_jobs').select(eb => eb.fn.countAll<string>().as('n')).where('status', '=', 'queued').executeTakeFirst()
+    const online = this.enabled && this.hub.online
     return {
-      online: this.enabled && this.hub.online,
+      online,
+      // the browser may upload only the selected part (docs/AUDIO-PREP.md)
+      prepared: online && !!this.hub.workerInfo?.features.includes(FEATURE_FILE_OFFSET),
       lastSeenAt: this.hub.lastSeenAt?.toISOString() ?? null,
       busy: !!this.activeJobId,
       queued: Number(queued?.n ?? 0),
@@ -190,6 +197,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       mime_type: input.mimeType,
       start_ms: input.startMs,
       end_ms: input.endMs,
+      file_offset_ms: input.fileOffsetMs,
       language: input.language,
       topic: input.topic,
       status: 'uploading'
@@ -336,6 +344,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       bytes: job.bytes ?? 0,
       startMs: job.startMs,
       endMs: job.endMs,
+      fileOffsetMs: job.fileOffsetMs,
       language: job.language,
       topic: job.topic,
       mediaPath: `/api/worker/jobs/${job.id}/media`,
@@ -510,6 +519,7 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       bytes: r.bytes === null ? null : Number(r.bytes),
       startMs: Number(r.start_ms),
       endMs: Number(r.end_ms),
+      fileOffsetMs: Number(r.file_offset_ms),
       language: r.language,
       topic: r.topic,
       status: r.status,

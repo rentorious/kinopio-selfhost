@@ -1,10 +1,11 @@
 import path from 'node:path'
 import { WebSocket } from 'ws'
 import type { JobOffer, ServerMessage, WorkerMessage } from '../../src/media/contract'
+import { FEATURE_FILE_OFFSET } from '../../src/media/contract'
 import type { WorkerConfig } from './config'
 import { runJob } from './job'
 
-export const VERSION = '0.1.0'
+export const VERSION = '0.2.0'
 
 /**
  * Keeps one websocket open to the server, reconnecting with backoff, and runs
@@ -49,6 +50,7 @@ export class Worker {
         version: VERSION,
         model: path.basename(this.config.whisperModel).replace(/^ggml-|\.bin$/g, ''),
         gpu: this.config.gpuName,
+        features: [FEATURE_FILE_OFFSET],
         ...(this.active ? { activeJobId: this.active.jobId } : {})
       })
     })

@@ -94,10 +94,10 @@ describe('media summaries', () => {
     await t.close()
   })
 
-  async function worker (activeJobId?: string): Promise<Inbox> {
+  async function worker (activeJobId?: string, features?: string[]): Promise<Inbox> {
     const w = await open(`ws://${base}/api/worker/ws`, { Authorization: 'Bearer test-worker-token' })
     sockets.push(w)
-    w.send({ type: 'hello', version: '1', model: 'large-v3', gpu: 'Test GPU', ...(activeJobId ? { activeJobId } : {}) })
+    w.send({ type: 'hello', version: '1', model: 'large-v3', gpu: 'Test GPU', ...(activeJobId ? { activeJobId } : {}), ...(features ? { features } : {}) })
     await waitFor(async () => (await media().status()).online)
     return w
   }
@@ -158,7 +158,7 @@ describe('media summaries', () => {
 
     it('reports the worker offline and refuses uploads before reading them', async () => {
       const status = await t.http().get('/api/media-summaries/status').set(auth(me)).expect(200)
-      expect(status.body).toMatchObject({ online: false, busy: false, queued: 0, model: null })
+      expect(status.body).toMatchObject({ online: false, prepared: false, busy: false, queued: 0, model: null })
       const res = await upload().expect(503)
       expect(res.body.error).toBe('transcriber_offline')
       expect(tmpFiles()).toEqual([])
@@ -175,12 +175,12 @@ describe('media summaries', () => {
       const w = await worker()
       const browser = await tab()
       const status = await t.http().get('/api/media-summaries/status').set(auth(me)).expect(200)
-      expect(status.body).toMatchObject({ online: true, model: 'large-v3' })
+      expect(status.body).toMatchObject({ online: true, prepared: false, model: 'large-v3' })
 
       const up = await upload().expect(202)
       const jobId = up.body.jobId
       const offer = await w.next(m => m.type === 'job')
-      expect(offer.job).toMatchObject({ jobId, fileName: 'lecture.mp4', mimeType: 'video/mp4', bytes: VIDEO.length, startMs: 300000, endMs: 3300000, language: 'en', topic: 'rhizosphere' })
+      expect(offer.job).toMatchObject({ jobId, fileName: 'lecture.mp4', mimeType: 'video/mp4', bytes: VIDEO.length, startMs: 300000, endMs: 3300000, fileOffsetMs: 0, language: 'en', topic: 'rhizosphere' })
       expect(tmpFiles()).toEqual([jobId])
       expect(await jobStatus(jobId)).toMatchObject({ status: 'downloading' })
       expect(await cardName()).toBe('⏳ lecture.mp4 · sending to transcriber')
@@ -307,7 +307,11 @@ describe('media summaries', () => {
         [{ startMs: 5000, endMs: 4000 }, /startMs/],
         [{ startMs: 0, endMs: 181 * 60_000 }, /180 minutes/],
         [{ language: 'english' }, /language/],
-        [{ fileName: '' }, /fileName/]
+        [{ fileName: '' }, /fileName/],
+        [{ fileOffsetMs: -1 }, /fileOffsetMs/],
+        [{ fileOffsetMs: 300001 }, /fileOffsetMs/],
+        [{ fileOffsetMs: 1.5 }, /fileOffsetMs/],
+        [{ fileOffsetMs: 'soon' }, /fileOffsetMs/]
       ] as Array<[Json, RegExp]>) {
         const res = await upload(fields).expect(400)
         expect(res.body.message).toMatch(msg)
@@ -324,6 +328,25 @@ describe('media summaries', () => {
       await upload().expect(503)
       w.send({ type: 'hello', version: '1', model: 'large-v3', gpu: 'Test GPU' })
       await waitFor(async () => (await media().status()).online)
+    })
+
+    it('reports prepared only for a worker that announces fileOffset', async () => {
+      const status = async () => (await t.http().get('/api/media-summaries/status').set(auth(me)).expect(200)).body
+      const old = await worker()
+      expect(await status()).toMatchObject({ online: true, prepared: false })
+      await old.close()
+      await waitFor(async () => !(await media().status()).online)
+      await worker(undefined, ['somethingElse'])
+      expect(await status()).toMatchObject({ online: true, prepared: false })
+      await worker(undefined, ['fileOffset'])
+      await waitFor(async () => (await status()).prepared === true)
+    })
+
+    it('passes fileOffsetMs to the worker for a prepared upload', async () => {
+      const w = await worker(undefined, ['fileOffset'])
+      const up = await upload({ startMs: 1_200_000, endMs: 1_500_000, fileOffsetMs: 1_200_000 }).expect(202)
+      const offer = await w.next(m => m.type === 'job')
+      expect(offer.job).toMatchObject({ jobId: up.body.jobId, startMs: 1_200_000, endMs: 1_500_000, fileOffsetMs: 1_200_000 })
     })
 
     it('ignores progress for a job the worker does not have', async () => {
@@ -356,7 +379,7 @@ describe('media summaries', () => {
       await t.http().post(`/api/media-summaries/${jobId}/uploaded`).set(auth(me)).expect(202)
 
       const offer = await w.next(m => m.type === 'job')
-      expect(offer.job).toMatchObject({ jobId, bytes: VIDEO.length })
+      expect(offer.job).toMatchObject({ jobId, bytes: VIDEO.length, fileOffsetMs: 0 })
       const dl = await t.http().get(offer.job.mediaPath).set('Authorization', 'Bearer test-worker-token').redirects(0).expect(302)
       expect(dl.headers.location).toBe(`https://bucket.test/.media/${jobId}?get&ttl=1800`)
       expect(tmpFiles()).toEqual([])
@@ -373,7 +396,11 @@ describe('media summaries', () => {
       await post({ mimeType: 'application/pdf' }).expect(415)
       await post({ size: undefined }).expect(400)
       await post({ cardId: undefined }).expect(400)
+      await post({ fileOffsetMs: 1 }).expect(400) // above startMs (0)
       await t.http().post('/api/media-summaries/direct').set(auth(other)).send(fields()).expect(401)
+      // a prepared file: audio only, starting at the selected start
+      const prepared = await post({ startMs: 60000, endMs: 600000, fileOffsetMs: 60000, mimeType: 'audio/ogg', fileName: 'lecture.mp4' }).expect(200)
+      expect(prepared.body.headers).toEqual({ 'Content-Type': 'audio/ogg' })
       expect(await bucket.list('.media/')).toEqual([])
     })
 

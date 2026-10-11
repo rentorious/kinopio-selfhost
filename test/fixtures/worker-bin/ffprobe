@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Fake ffprobe for worker tests: a file containing NOAUDIO has only a video stream.
+# Fake ffprobe for worker tests: a file containing NOAUDIO has only a video stream;
+# DURATION=<seconds> in the file sets its duration (default 3600).
 file="${@: -1}"
+duration=$(grep -ao 'DURATION=[0-9.]*' "$file" 2>/dev/null | head -1 | cut -d= -f2)
+duration=${duration:-3600.0}
 if grep -q NOAUDIO "$file" 2>/dev/null; then
   echo '{"streams":[{"codec_type":"video"}],"format":{"duration":"600.0"}}'
 else
-  echo '{"streams":[{"codec_type":"video"},{"codec_type":"audio"}],"format":{"duration":"3600.0"}}'
+  echo "{\"streams\":[{\"codec_type\":\"video\"},{\"codec_type\":\"audio\"}],\"format\":{\"duration\":\"$duration\"}}"
 fi

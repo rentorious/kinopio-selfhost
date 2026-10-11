@@ -25,6 +25,7 @@ export interface WorkerInfo {
   version: string
   model: string
   gpu: string
+  features: string[]
 }
 
 /**
@@ -98,7 +99,8 @@ export class WorkerHub extends EventEmitter implements OnModuleDestroy {
       try { msg = JSON.parse(raw.toString()) } catch { return }
       if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return
       if (msg.type === 'hello') {
-        this.info = { version: String(msg.version ?? ''), model: String(msg.model ?? ''), gpu: String(msg.gpu ?? '') }
+        const features = Array.isArray(msg.features) ? msg.features.filter((f): f is string => typeof f === 'string').slice(0, 20) : []
+        this.info = { version: String(msg.version ?? ''), model: String(msg.model ?? ''), gpu: String(msg.gpu ?? ''), features }
         this.log.log(`worker connected: ${this.info.model} on ${this.info.gpu} (v${this.info.version})`)
       }
       this.emit('message', msg)

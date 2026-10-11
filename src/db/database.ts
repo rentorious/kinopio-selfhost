@@ -69,6 +69,7 @@ export interface MediaJobsTable {
   bytes: string | number | null
   start_ms: string | number
   end_ms: string | number
+  file_offset_ms: Generated<string | number>
   language: Generated<string>
   topic: Generated<string>
   status: MediaJobStatus

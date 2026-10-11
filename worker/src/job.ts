@@ -53,11 +53,15 @@ export async function runJob (offer: JobOffer, deps: JobDeps): Promise<void> {
 
     const info = await probe(config, media, signal)
     if (!info.hasAudio) throw new JobFailure('the file has no audio')
-    const endMs = info.durationMs ? Math.min(offer.endMs, info.durationMs) : offer.endMs
+    // The file may be only the selected part (docs/AUDIO-PREP.md): its 0 sits
+    // at fileOffsetMs in the original. startMs/endMs are in the original.
+    const offset = offer.fileOffsetMs ?? 0
+    const fileEndMs = info.durationMs ? offset + info.durationMs : undefined
+    const endMs = fileEndMs ? Math.min(offer.endMs, fileEndMs) : offer.endMs
     if (endMs <= offer.startMs) throw new JobFailure('the selected start is past the end of the file')
 
     const wav = path.join(dir, 'audio.wav')
-    await cutAudio(config, media, wav, offer.startMs, endMs, signal)
+    await cutAudio(config, media, wav, offer.startMs - offset, endMs - offset, signal)
     await fs.promises.rm(media, { force: true })
 
     let lastPercent = -1
@@ -86,7 +90,7 @@ export async function runJob (offer: JobOffer, deps: JobDeps): Promise<void> {
       fileName: offer.fileName,
       startMs: offer.startMs,
       endMs,
-      durationMs: info.durationMs,
+      durationMs: fileEndMs,
       language: offer.language,
       topic: offer.topic,
       segments,
