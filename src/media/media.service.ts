@@ -53,6 +53,7 @@ export interface NewJob {
 const FINAL: MediaJobStatus[] = ['done', 'failed', 'canceled']
 const WITH_WORKER: MediaJobStatus[] = ['downloading', 'transcribing', 'summarizing']
 const SWEEP_MS = 10 * 60 * 1000
+const SUMMARY_CARD_WIDTH = 360
 
 export class MediaError extends Error {
   constructor (readonly status: number, message: string, readonly details?: string[]) { super(message) }
@@ -341,7 +342,8 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     await this.db.updateTable('media_jobs')
       .set({ status: 'done', percent: null, transcript_space_id: transcriptId, updated_at: new Date() })
       .where('id', '=', job.id).execute()
-    await this.setCardName(job, summaryCardText(result, info, transcriptUrl), { final: true })
+    // wider than a normal card, so the abstract reads comfortably
+    await this.setCardName(job, summaryCardText(result, info, transcriptUrl), { final: true, extra: { resizeWidth: SUMMARY_CARD_WIDTH } })
     this.log.log(`job ${job.id} done: ${result.sections.length} sections in space ${transcriptId}`)
   }
 
@@ -350,12 +352,13 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
    * space's timestamps behave as if the user typed it) and push it to every
    * open tab on that space.
    */
-  private async setCardName (job: Job, name: string, opts: { final?: boolean } = {}): Promise<void> {
+  private async setCardName (job: Job, name: string, opts: { final?: boolean, extra?: Record<string, unknown> } = {}): Promise<void> {
     const nameUpdatedAt = new Date().toISOString()
+    const extra = opts.extra ?? {}
     this.relay.broadcast(job.spaceId, {
-      message: { action: 'updateCardsState', store: 'cardStore', updates: [{ id: job.cardId, name, nameUpdatedAt }] }
+      message: { action: 'updateCardsState', store: 'cardStore', updates: [{ id: job.cardId, name, nameUpdatedAt, ...extra }] }
     })
-    const saved = await this.updateCard(job, name, nameUpdatedAt)
+    const saved = await this.updateCard(job, name, nameUpdatedAt, extra)
     if (saved || !opts.final) return
     // The placeholder card hasn't reached the server yet (the client batches
     // its writes). Try again for a while, then create it where it was dropped.
@@ -364,11 +367,11 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
       const t = setTimeout(() => {
         this.timers.delete(t)
         void this.serial(async () => {
-          if (await this.updateCard(job, name, nameUpdatedAt)) return
+          if (await this.updateCard(job, name, nameUpdatedAt, extra)) return
           if (++attempt < 10) return retry()
           await this.ops.apply(job.userId, [{
             name: 'createCard',
-            body: { id: job.cardId, x: job.cardX ?? 100, y: job.cardY ?? 100, z: 1, name, nameUpdatedAt, spaceId: job.spaceId, operationId: nanoid() }
+            body: { id: job.cardId, x: job.cardX ?? 100, y: job.cardY ?? 100, z: 1, name, nameUpdatedAt, ...extra, spaceId: job.spaceId, operationId: nanoid() }
           }])
         })
       }, 3000)
@@ -378,10 +381,10 @@ export class MediaService implements OnModuleInit, OnModuleDestroy {
     retry()
   }
 
-  private async updateCard (job: Job, name: string, nameUpdatedAt: string): Promise<boolean> {
+  private async updateCard (job: Job, name: string, nameUpdatedAt: string, extra: Record<string, unknown> = {}): Promise<boolean> {
     const res = await this.ops.apply(job.userId, [{
       name: 'updateCard',
-      body: { id: job.cardId, name, nameUpdatedAt, spaceId: job.spaceId, operationId: nanoid() }
+      body: { id: job.cardId, name, nameUpdatedAt, ...extra, spaceId: job.spaceId, operationId: nanoid() }
     }])
     return res.errors.length === 0
   }

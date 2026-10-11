@@ -1,0 +1,457 @@
+diff --git a/src/components/dialogs/MediaSummary.vue b/src/components/dialogs/MediaSummary.vue
+new file mode 100644
+index 0000000..4852f59
+--- /dev/null
++++ b/src/components/dialogs/MediaSummary.vue
+@@ -0,0 +1,367 @@
++<script setup>
++// kinopio-selfhost: the Media summary dialog (docs/MEDIA-SUMMARIES.md §2, §11 in kinopio-selfhost).
++// Preview a dropped audio or video file, pick the part to process, then send it to
++// the server, which hands it to the transcription worker on your own PC.
++import { reactive, computed, watch, onMounted, onBeforeUnmount, ref } from 'vue'
++
++import { useMediaSummaryStore } from '@/stores/useMediaSummaryStore'
++import { useCardStore } from '@/stores/useCardStore'
++import { useUserStore } from '@/stores/useUserStore'
++import { useSpaceStore } from '@/stores/useSpaceStore'
++import { useApiStore } from '@/stores/useApiStore'
++import { useUploadStore } from '@/stores/useUploadStore'
++import { useGlobalStore } from '@/stores/useGlobalStore'
++
++import utils from '@/utils.js'
++import consts from '@/consts.js'
++
++import { nanoid } from 'nanoid'
++
++const mediaSummaryStore = useMediaSummaryStore()
++const cardStore = useCardStore()
++const userStore = useUserStore()
++const spaceStore = useSpaceStore()
++const apiStore = useApiStore()
++const uploadStore = useUploadStore()
++const globalStore = useGlobalStore()
++
++const LANGUAGE_KEY = 'kinopio-selfhost-media-language'
++const MAX_MS = 180 * 60 * 1000
++const LANGUAGES = ['auto', 'en', 'sl', 'sr', 'hr', 'bs', 'it', 'de', 'fr', 'es', 'pt', 'nl', 'pl', 'cs', 'ru', 'uk', 'ja', 'zh']
++
++const mediaElement = ref(null)
++let statusTimer
++
++const state = reactive({
++  objectUrl: null,
++  durationMs: null,
++  canPreview: true,
++  startMs: 0,
++  endMs: null,
++  startText: '0:00',
++  endText: '',
++  language: 'auto',
++  topic: '',
++  status: null, // { online, lastSeenAt, model }
++  statusError: false
++})
++
++const file = computed(() => mediaSummaryStore.file)
++const visible = computed(() => mediaSummaryStore.isVisible)
++const isVideo = computed(() => (file.value?.type || '').startsWith('video/'))
++
++const languageName = (code) => {
++  if (code === 'auto') { return 'Detect language' }
++  try {
++    return new Intl.DisplayNames(['en'], { type: 'language' }).of(code)
++  } catch (error) {
++    return code
++  }
++}
++
++const format = (ms) => {
++  if (ms === null || ms === undefined) { return '' }
++  const total = Math.max(0, Math.floor(ms / 1000))
++  const h = Math.floor(total / 3600)
++  const m = Math.floor((total % 3600) / 60)
++  const s = String(total % 60).padStart(2, '0')
++  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
++}
++const parse = (text) => {
++  const match = /^\s*(?:(\d+):)?(\d{1,2}):(\d{2})\s*$/.exec(text || '')
++  if (!match) { return null }
++  const [, h, m, s] = match
++  if (Number(s) > 59) { return null }
++  return ((Number(h || 0) * 60 + Number(m)) * 60 + Number(s)) * 1000
++}
++
++const fileSize = computed(() => {
++  if (!file.value) { return '' }
++  const mb = file.value.size / 1024 / 1024
++  return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.ceil(file.value.size / 1024)} KB`
++})
++const selectedMs = computed(() => {
++  if (state.endMs === null) { return null }
++  return state.endMs - state.startMs
++})
++const rangeError = computed(() => {
++  if (state.endMs === null) { return null }
++  if (state.endMs <= state.startMs) { return 'The end has to be after the start' }
++  if (state.endMs - state.startMs > MAX_MS) { return 'Pick at most 3 hours' }
++  return null
++})
++const statusText = computed(() => {
++  if (state.statusError) { return 'Couldn\'t reach the server' }
++  if (!state.status) { return 'Checking the transcriber…' }
++  if (state.status.online) { return `Transcriber online${state.status.model ? ` (${state.status.model})` : ''}` }
++  if (state.status.lastSeenAt) {
++    const seen = new Date(state.status.lastSeenAt)
++    return `Transcriber offline (last seen ${seen.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })})`
++  }
++  return 'Transcriber offline'
++})
++const canSummarize = computed(() => Boolean(state.status?.online && !rangeError.value && state.endMs !== null))
++
++// open / close
++
++watch(visible, (value) => {
++  if (value) { init() } else { cleanup() }
++})
++onMounted(() => {
++  window.addEventListener('keydown', closeOnEscape)
++})
++onBeforeUnmount(() => {
++  window.removeEventListener('keydown', closeOnEscape)
++  cleanup()
++})
++
++const init = () => {
++  cleanup()
++  state.objectUrl = URL.createObjectURL(file.value)
++  state.durationMs = null
++  state.canPreview = true
++  state.startMs = 0
++  state.endMs = null
++  state.startText = '0:00'
++  state.endText = ''
++  state.topic = ''
++  try {
++    state.language = window.localStorage.getItem(LANGUAGE_KEY) || 'auto'
++  } catch (error) {
++    state.language = 'auto'
++  }
++  state.status = null
++  state.statusError = false
++  checkStatus()
++  statusTimer = setInterval(checkStatus, 10000)
++}
++const cleanup = () => {
++  clearInterval(statusTimer)
++  if (state.objectUrl) { URL.revokeObjectURL(state.objectUrl) }
++  state.objectUrl = null
++}
++const close = () => {
++  mediaSummaryStore.close()
++}
++const closeOnEscape = (event) => {
++  if (visible.value && event.key === 'Escape') { close() }
++}
++
++const checkStatus = async () => {
++  try {
++    const options = await apiStore.requestOptions({ method: 'GET' })
++    const response = await fetch(`${consts.apiHost()}/media-summaries/status`, options)
++    if (!response.ok) { throw new Error(response.status) }
++    state.status = await response.json()
++    state.statusError = false
++  } catch (error) {
++    console.warn('🚑 media summary status', error)
++    state.statusError = true
++  }
++}
++
++// preview and range
++
++const loadedMetadata = () => {
++  const seconds = mediaElement.value?.duration
++  if (!Number.isFinite(seconds)) { return previewFailed() }
++  state.durationMs = Math.round(seconds * 1000)
++  setEnd(Math.min(state.durationMs, MAX_MS))
++}
++const previewFailed = () => {
++  // the browser can't play this codec: process the whole file (the PC caps it at the real length)
++  state.canPreview = false
++  state.durationMs = null
++  setStart(0)
++  setEnd(MAX_MS)
++}
++const setStart = (ms) => {
++  state.startMs = Math.max(0, Math.round(ms))
++  state.startText = format(state.startMs)
++}
++const setEnd = (ms) => {
++  state.endMs = Math.round(ms)
++  state.endText = format(state.endMs)
++}
++const setStartAtPlayhead = () => setStart((mediaElement.value?.currentTime || 0) * 1000)
++const setEndAtPlayhead = () => setEnd((mediaElement.value?.currentTime || 0) * 1000)
++const resetRange = () => {
++  setStart(0)
++  setEnd(Math.min(state.durationMs ?? MAX_MS, MAX_MS))
++}
++const updateStartText = () => {
++  const ms = parse(state.startText)
++  if (ms !== null) { setStart(ms) } else { state.startText = format(state.startMs) }
++}
++const updateEndText = () => {
++  const ms = parse(state.endText)
++  if (ms !== null) { setEnd(state.durationMs ? Math.min(ms, state.durationMs) : ms) } else { state.endText = format(state.endMs) }
++}
++const playSelection = () => {
++  const element = mediaElement.value
++  if (!element) { return }
++  element.currentTime = state.startMs / 1000
++  element.play()
++}
++const updateLanguage = () => {
++  try {
++    window.localStorage.setItem(LANGUAGE_KEY, state.language)
++  } catch (error) {}
++}
++
++// actions
++
++const uploadAsFile = () => {
++  const { file: selected, position } = mediaSummaryStore
++  close()
++  uploadStore.addCardsAndUploadFiles({ files: [selected], position, asFile: true })
++}
++
++const summarize = () => {
++  if (!canSummarize.value) { return }
++  const { file: selected, position } = mediaSummaryStore
++  const startMs = state.startMs
++  const endMs = state.endMs
++  const language = state.language
++  const topic = state.topic.trim()
++  close()
++
++  const cardId = nanoid()
++  const spaceId = spaceStore.id
++  const highestCardZ = utils.highestItemZ(cardStore.getAllCards)
++  cardStore.createCard({ position: { x: position.x, y: position.y, z: highestCardZ }, name: consts.uploadPlaceholder, id: cardId }, true)
++  // the card's usual upload progress bar; like card uploads, keyed by card only
++  uploadStore.addPendingUpload({ key: `media-summary/${cardId}`, fileName: selected.name, cardId })
++  const finishProgress = () => uploadStore.updatePendingUpload({ cardId, percentComplete: 100 })
++
++  const form = new FormData()
++  const fields = { spaceId, cardId, fileName: selected.name, startMs, endMs, language, topic, x: Math.round(position.x), y: Math.round(position.y) }
++  Object.keys(fields).forEach(key => form.append(key, String(fields[key])))
++  form.append('file', selected)
++
++  const request = new XMLHttpRequest()
++  request.upload.onprogress = (event) => {
++    if (!event.lengthComputable) { return }
++    const percentComplete = Math.min(99, Math.floor(event.loaded / event.total * 100))
++    uploadStore.updatePendingUpload({ cardId, percentComplete })
++  }
++  request.onload = () => {
++    finishProgress()
++    if (request.status === 202) { return } // the server updates the card from here on
++    let message = `upload failed (${request.status})`
++    try {
++      message = JSON.parse(request.responseText).message || message
++    } catch (error) {}
++    showError(cardId, selected.name, message)
++  }
++  request.onerror = () => {
++    finishProgress()
++    showError(cardId, selected.name, 'the upload was interrupted')
++  }
++  request.open('POST', `${consts.apiHost()}/media-summaries`)
++  if (userStore.apiKey) { request.setRequestHeader('Authorization', userStore.apiKey) }
++  request.send(form)
++}
++
++const showError = (cardId, fileName, message) => {
++  const name = `⚠️ ${fileName} · ${message}`
++  cardStore.updateCard({ id: cardId, name })
++  globalStore.addNotification({ message: `Couldn't summarize ${fileName}: ${message}`, type: 'danger' })
++}
++</script>
++
++<template lang="pug">
++dialog.media-summary(v-if="visible" :open="visible" @click.left.stop @pointerdown.stop @keydown.esc="close" @keydown.stop)
++  section.title-section
++    .row.title-row
++      span Summarize {{ isVideo ? 'video' : 'audio' }}
++      button.small-button(@click="close" title="Cancel") ✕
++    p.file-name {{ file.name }} · {{ fileSize }}
++    p.status(:class="{ online: state.status && state.status.online, offline: state.statusError || (state.status && !state.status.online) }")
++      span.dot
++      span {{ statusText }}
++  section.preview-section
++    template(v-if="state.canPreview")
++      video(v-if="isVideo" ref="mediaElement" :src="state.objectUrl" controls preload="metadata" @loadedmetadata="loadedMetadata" @error="previewFailed")
++      audio(v-else ref="mediaElement" :src="state.objectUrl" controls preload="metadata" @loadedmetadata="loadedMetadata" @error="previewFailed")
++    p.badge.info(v-else) Your browser can't play this file, so the whole file will be processed (up to 3 hours).
++  section.range-section(v-if="state.canPreview")
++    .row
++      label Start
++      input.time(v-model="state.startText" @blur="updateStartText" @keydown.enter="updateStartText")
++      button(@click="setStartAtPlayhead") Set at playhead
++    .row
++      label End
++      input.time(v-model="state.endText" @blur="updateEndText" @keydown.enter="updateEndText")
++      button(@click="setEndAtPlayhead") Set at playhead
++    .row
++      span.selected(v-if="selectedMs !== null && !rangeError") Selected: {{ format(selectedMs) }}
++      span.badge.danger(v-if="rangeError") {{ rangeError }}
++    .row
++      button(@click="playSelection") Play from start
++      button(@click="resetRange") Whole file
++  section.options-section
++    .row
++      label Language
++      select(v-model="state.language" @change="updateLanguage")
++        option(v-for="code in LANGUAGES" :value="code" :key="code") {{ languageName(code) }}
++    .row
++      input.topic(v-model="state.topic" maxlength="500" placeholder="Topic hint (optional): subject, names, jargon")
++  section.actions-section
++    .row
++      button.success(:disabled="!canSummarize" @click="summarize") Summarize
++      button(@click="uploadAsFile") Upload as file
++      button(@click="close") Cancel
++</template>
++
++<style lang="stylus">
++dialog.media-summary
++  position fixed
++  left 50%
++  top 72px
++  transform translateX(-50%)
++  width 380px
++  max-width calc(100vw - 24px)
++  max-height calc(100vh - 96px)
++  overflow auto
++  z-index 1000
++  .title-row
++    justify-content space-between
++  .file-name
++    word-break break-all
++    opacity 0.8
++  .status
++    display flex
++    align-items center
++    gap 6px
++    .dot
++      width 8px
++      height 8px
++      border-radius 50%
++      background var(--secondary-active-background)
++    &.online .dot
++      background var(--success-background)
++    &.offline .dot
++      background var(--danger-background)
++  video
++    width 100%
++    max-height 200px
++    background black
++  audio
++    width 100%
++  .row
++    display flex
++    align-items center
++    gap 6px
++    margin-top 6px
++  label
++    min-width 64px
++  input.time
++    width 80px
++  input.topic
++    width 100%
++  select
++    flex 1
++  .selected
++    opacity 0.8
++</style>
+diff --git a/src/stores/useMediaSummaryStore.js b/src/stores/useMediaSummaryStore.js
+new file mode 100644
+index 0000000..010f3b4
+--- /dev/null
++++ b/src/stores/useMediaSummaryStore.js
+@@ -0,0 +1,23 @@
++// kinopio-selfhost: media summaries (docs/MEDIA-SUMMARIES.md in kinopio-selfhost).
++// Holds the audio or video file waiting in the Media summary dialog.
++import { defineStore } from 'pinia'
++
++export const useMediaSummaryStore = defineStore('mediaSummary', {
++  state: () => ({
++    file: null,
++    position: null
++  }),
++  getters: {
++    isVisible: (state) => Boolean(state.file)
++  },
++  actions: {
++    open ({ file, position }) {
++      this.file = file
++      this.position = position
++    },
++    close () {
++      this.file = null
++      this.position = null
++    }
++  }
++})
+diff --git a/src/stores/useUploadStore.js b/src/stores/useUploadStore.js
+index 3c31fd7..98510a1 100644
+--- a/src/stores/useUploadStore.js
++++ b/src/stores/useUploadStore.js
+@@ -8,6 +8,7 @@ import { useUserStore } from '@/stores/useUserStore'
+ import { useSpaceStore } from '@/stores/useSpaceStore'
+ import { useApiStore } from '@/stores/useApiStore'
+ import { useBroadcastStore } from '@/stores/useBroadcastStore'
++import { useMediaSummaryStore } from '@/stores/useMediaSummaryStore'
+ 
+ import utils from '@/utils.js'
+ import consts from '@/consts.js'
+@@ -160,7 +161,7 @@ export const useUploadStore = defineStore('upload', {
+         this.addImageDataUrl({ file, cardId, spaceId, boxId })
+       })
+     },
+-    async addCardsAndUploadFiles ({ files, event, position }) {
++    async addCardsAndUploadFiles ({ files, event, position, asFile }) {
+       const apiStore = useApiStore()
+       const userStore = useUserStore()
+       const cardStore = useCardStore()
+@@ -185,6 +186,13 @@ export const useUploadStore = defineStore('upload', {
+         globalStore.addNotificationWithPosition({ message: 'Outside Space', position, type: 'info', icon: 'cancel', layer: 'app' })
+         return
+       }
++      // kinopio-selfhost: a single audio or video file opens the Media summary dialog
++      // instead of uploading; its "Upload as file" button comes back here with asFile
++      const isMedia = files.length === 1 && /^(audio|video)\//.test(files[0].type || '')
++      if (isMedia && !asFile) {
++        useMediaSummaryStore().open({ file: files[0], position })
++        return
++      }
+       // check blocked file types
+       const hasBlockedFile = files.find(file => blockedExtensions.some(ext => file.name.toLowerCase().endsWith(ext)))
+       if (hasBlockedFile) {
+diff --git a/src/views/Space.vue b/src/views/Space.vue
+index 93dc6b3..b341900 100644
+--- a/src/views/Space.vue
++++ b/src/views/Space.vue
+@@ -51,6 +51,7 @@ import Panning from '@/components/Panning.vue'
+ import TagDetails from '@/components/dialogs/TagDetails.vue'
+ import ItemsLocked from '@/components/ItemsLocked.vue'
+ import UserDetails from '@/components/dialogs/UserDetails.vue'
++import MediaSummary from '@/components/dialogs/MediaSummary.vue'
+ import SpaceBackground from '@/components/SpaceBackground.vue'
+ import SpaceBackgroundTint from '@/components/SpaceBackgroundTint.vue'
+ import OutsideSpaceBackground from '@/components/OutsideSpaceBackground.vue'
+@@ -1221,6 +1222,7 @@ const shouldPrevent = computed(() => {
+   Footer
+   TagDetails
+   UserDetails
++  MediaSummary
+   #space-minimap.minimap-canvas-wrap(v-if="minimapIsVisible")
+     MinimapCanvas(:visible="true" :size="minimapSize" :preventAnimation="!(isPanning || isPanningReady)")
+   //- handlers

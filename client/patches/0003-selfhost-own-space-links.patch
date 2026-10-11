@@ -1,0 +1,44 @@
+diff --git a/src/components/Card.vue b/src/components/Card.vue
+index 2923db4..64a659d 100644
+--- a/src/components/Card.vue
++++ b/src/components/Card.vue
+@@ -1173,7 +1173,7 @@ const shouldUpdateUrlPreview = (url) => {
+   const previewIsVisible = props.card.urlPreviewIsVisible
+   const isNotPreviewUrl = url !== props.card.urlPreviewUrl
+   const isNotErrorUrl = url !== props.card.urlPreviewErrorUrl
+-  const isNotKinopioUrl = !url.startsWith('https://kinopio.club')
++  const isNotKinopioUrl = !url.startsWith('https://kinopio.club') && !url.startsWith(consts.kinopioDomain())
+   const isLocalhostUrl = url.match(utils.localhostUrlPattern())
+   return previewIsVisible && isNotPreviewUrl && isNotErrorUrl && isNotKinopioUrl && !isLocalhostUrl
+ }
+diff --git a/src/components/dialogs/CardDetails.vue b/src/components/dialogs/CardDetails.vue
+index a4e189c..582c12a 100644
+--- a/src/components/dialogs/CardDetails.vue
++++ b/src/components/dialogs/CardDetails.vue
+@@ -1001,7 +1001,7 @@ const validUrls = computed(() => {
+ const validWebUrls = computed(() => {
+   const urls = validUrls.value.filter(url => {
+     const urlHasProtocol = utils.urlHasProtocol(url)
+-    const isUpload = url.includes('us-east-1.linodeobjects.com') || url.includes('cdn.kinopio.club')
++    const isUpload = url.includes('us-east-1.linodeobjects.com') || url.includes('cdn.kinopio.club') || url.startsWith(consts.cdnHost)
+     const isSpace = utils.urlIsSpace(url)
+     return urlHasProtocol && !isUpload && !isSpace
+   })
+diff --git a/src/utils.js b/src/utils.js
+index 8b736e5..1237f95 100644
+--- a/src/utils.js
++++ b/src/utils.js
+@@ -2505,7 +2505,12 @@ export default {
+     if (this.urlIsGroupInvite(url)) { return }
+     if (this.urlIsSpaceInvite(url)) { return }
+     let spaceUrlPattern
+-    if (consts.isDevelopment()) {
++    const domain = consts.kinopioDomain()
++    if (domain !== 'https://kinopio.club' && !consts.isDevelopment()) {
++      // kinopio-selfhost: space links on our own origin, but not uploads (/files) or the API
++      const escaped = domain.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
++      spaceUrlPattern = new RegExp(`(${escaped}\\/)(?!invite\\?|api(?:\\/|$)|files(?:\\/|$))(['A-Za-z0-9-]+)`, 'gi')
++    } else if (consts.isDevelopment()) {
+       // https://regexr.com/5hjc2
+       spaceUrlPattern = new RegExp(/(?:kinopio\.local:.*\/)(.*)\b/gi)
+     } else {

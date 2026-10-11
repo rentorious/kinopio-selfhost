@@ -7,8 +7,8 @@ The client calls **104** distinct method + path combinations on the API host (on
 | Tier | Meaning | Count |
 |---|---|---|
 | M1 | Milestone 1 — real implementation | 18 |
-| M2 | Milestone 2 — real implementation | 4 |
-| M3 | Milestone 3 — real implementation | 15 |
+| M2 | Milestone 2 — real implementation | 5 |
+| M3 | Milestone 3 — real implementation | 14 |
 | M4 | Milestone 4 (sharing, optional) | 3 |
 | STUB | Return the fixed body shown; never errors | 34 |
 | SKIP | Not supported: return 404 with JSON body | 23 |
@@ -44,6 +44,7 @@ Rules that apply to every row are in SPEC.md §4 (always JSON, never 204, CORS h
 | Method + path | Response | Notes | Client fn |
 |---|---|---|---|
 | `POST /card/to-inbox` | `{}` | Place at `x: 70`. 404 if no Inbox. | `createCardInInbox` L1182 |
+| `POST /item/multiple` | `{"cards":[],"spaces":[]}` | A read: the cards and spaces that cards link to, limited to what the viewer can read. Pulled into M2b so a summary card's transcript link shows the space name. | `sendOtherItemsQueue` L1093 |
 | `POST /services/url-preview` | card patch | Status must be exactly 200. `urlPreviewUrl` must equal the requested url. | `urlPreview` L1456 |
 | `POST /upload/presigned-post` | `{url, fields}` | S3 POST policy. File ends up at `cdnHost/<key>`. | `createPresignedPost` L1378 |
 | `POST /upload/presigned-post/multiple` | `[{url, fields}]` | Same order as `files`. | `createMultiplePresignedPosts` L1389 |
@@ -66,7 +67,6 @@ Rules that apply to every row are in SPEC.md §4 (always JSON, never 204, CORS h
 | `PATCH /user/update-email` | `{}` | Body `{email}`. Conflict → JSON `{"type":"unique violation"}`. | `updateEmail` L403 |
 | `PATCH /user/update-password` | `{}` | Body `{password, apiKey}`. | `updatePassword` L393 |
 | `POST /card/search` | array of cards | Must be an array. Include `space: {name}` per card. | `searchCards` L1196 |
-| `POST /item/multiple` | `{"cards":[],"spaces":[]}` | A read: looks up items that cards link to. Stub the empty shape until M3. | `sendOtherItemsQueue` L1093 |
 
 ## M4: Milestone 4 (sharing, optional)
 

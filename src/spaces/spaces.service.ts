@@ -35,6 +35,29 @@ interface SpaceRow {
 
 const iso = (d: Date | null) => (d ? d.toISOString() : null)
 
+/** The summary fields the space list and other-space previews read (SPEC.md §6.3). */
+function summaryFromRow (r: Pick<SpaceRow, 'id' | 'name' | 'privacy' | 'owner_id' | 'is_removed' | 'removed_by_user_id' | 'edited_at' | 'edited_by_user_id' | 'meta' | 'created_at' | 'updated_at'> & { owner_prefs: JsonObject }): JsonObject {
+  const meta: JsonObject = {}
+  for (const k of SUMMARY_META_KEYS) if (k in r.meta) meta[k] = r.meta[k]
+  return {
+    ...meta,
+    id: r.id,
+    name: r.name,
+    url: spaceUrl(r.name, r.id),
+    privacy: r.privacy,
+    userId: r.owner_id,
+    isRemoved: r.is_removed,
+    removedByUserId: r.removed_by_user_id,
+    createdAt: iso(r.created_at),
+    updatedAt: iso(r.updated_at),
+    editedAt: iso(r.edited_at),
+    editedByUserId: r.edited_by_user_id,
+    users: [publicMeta({ id: r.owner_id, prefs: r.owner_prefs })],
+    collaborators: [],
+    groups: []
+  }
+}
+
 /** Summary fields the space list UI reads (SPEC.md §6.3). */
 const SUMMARY_META_KEYS = ['showInExplore', 'isTemplate', 'previewImage', 'previewThumbnailImage', 'category', 'background', 'backgroundTint']
 
@@ -111,6 +134,33 @@ export class SpacesService {
     }
   }
 
+  /**
+   * POST /item/multiple: the cards and spaces that cards link to (other-card
+   * and other-space previews), limited to what the viewer can read.
+   */
+  async otherItems (viewer: Viewer, cardIds: unknown, spaceIds: unknown): Promise<{ cards: JsonObject[], spaces: JsonObject[] }> {
+    const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter(isValidId))].slice(0, 200) : [])
+    const wantedSpaces = ids(spaceIds)
+    const wantedCards = ids(cardIds)
+    const cardRows = wantedCards.length
+      ? await this.db.selectFrom('items').select(['type', 'id', 'user_id', 'data', 'created_at', 'updated_at', 'space_id'])
+        .where('type', '=', 'card').where('id', 'in', wantedCards).execute()
+      : []
+    const spaceIdsToLoad = [...new Set([...wantedSpaces, ...cardRows.map(r => r.space_id)])]
+    const rows = spaceIdsToLoad.length
+      ? await this.db.selectFrom('spaces').innerJoin('users', 'users.id', 'spaces.owner_id')
+        .selectAll('spaces').select('users.prefs as owner_prefs')
+        .where('spaces.id', 'in', spaceIdsToLoad).execute()
+      : []
+    const readable = new Map(rows.filter(r => this.canRead(r, viewer)).map(r => [r.id, r]))
+    const spaces = wantedSpaces.filter(id => readable.has(id)).map(id => summaryFromRow(readable.get(id)!))
+    const cards = cardRows.filter(r => readable.has(r.space_id)).map(r => ({
+      ...(itemFromRow(r as ItemRow, r.space_id) as JsonObject),
+      spaceName: readable.get(r.space_id)!.name
+    }))
+    return { cards, spaces }
+  }
+
   /** GET /user/spaces and /user/removed-spaces. */
   async summaries (userId: string, removed: boolean): Promise<JsonObject[]> {
     const rows = await this.db.selectFrom('spaces')
@@ -124,27 +174,7 @@ export class SpacesService {
       .where('spaces.is_removed', '=', removed)
       .orderBy('spaces.updated_at', 'desc')
       .execute()
-    return rows.map(r => {
-      const meta: JsonObject = {}
-      for (const k of SUMMARY_META_KEYS) if (k in r.meta) meta[k] = r.meta[k]
-      return {
-        ...meta,
-        id: r.id,
-        name: r.name,
-        url: spaceUrl(r.name, r.id),
-        privacy: r.privacy,
-        userId: r.owner_id,
-        isRemoved: r.is_removed,
-        removedByUserId: r.removed_by_user_id,
-        createdAt: iso(r.created_at),
-        updatedAt: iso(r.updated_at),
-        editedAt: iso(r.edited_at),
-        editedByUserId: r.edited_by_user_id,
-        users: [publicMeta({ id: r.owner_id, prefs: r.owner_prefs })],
-        collaborators: [],
-        groups: []
-      }
-    })
+    return rows.map(r => summaryFromRow(r))
   }
 
   /**

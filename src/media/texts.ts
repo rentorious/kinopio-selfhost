@@ -46,7 +46,7 @@ export function sourceLine (job: JobInfo): string {
 
 /** The finished summary card: card.md, then the source line and the transcript link, within the card limit. */
 export function summaryCardText (result: MediaResult, job: JobInfo, transcriptUrl: string): string {
-  const footer = `\n\n${sourceLine(job)}\n📄 ${transcriptUrl}`
+  const footer = `\n\n${sourceLine(job)}\n${transcriptUrl}`
   let body = result.card.trim()
   const room = CARD_CHARACTER_LIMIT - footer.length
   if (body.length > room) body = body.slice(0, room - 1).trimEnd() + '…'

@@ -17,6 +17,13 @@ export class SpacesController {
 
   // Fixed paths first: `space/:id` would otherwise swallow them.
 
+  /** Other-card and other-space previews (ENDPOINTS.md). Signed-out viewers get public spaces only. */
+  @Post('item/multiple')
+  @HttpCode(200)
+  async otherItems (@CurrentUser() user: AuthUser | undefined, @Body() body: JsonObject) {
+    return await this.spaces.otherItems(viewer(user), body?.cardIds, body?.spaceIds)
+  }
+
   @Get('space/inbox')
   @UseGuards(SignedInGuard)
   async inboxId (@CurrentUser() user: AuthUser) {

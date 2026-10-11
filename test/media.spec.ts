@@ -208,7 +208,7 @@ describe('media summaries', () => {
       const summary = await cardName()
       expect(summary.startsWith('# The rhizosphere microbiome\n## Summary')).toBe(true)
       expect(summary).toContain('🎧 lecture.mp4 · 5:00–55:00 (50 min) · English')
-      expect(summary).toMatch(new RegExp(`📄 http://127\\.0\\.0\\.1:\\d+/transcript-the-rhizosphere-microbiome-${done.transcriptSpaceId}$`))
+      expect(summary).toMatch(new RegExp(`\\n🎧 [^\\n]*\\nhttp://127\\.0\\.0\\.1:\\d+/transcript-the-rhizosphere-microbiome-${done.transcriptSpaceId}$`))
       await browser.next(m => m.message?.updates?.[0]?.name === summary)
 
       const spaces = (await t.http().get('/api/user/spaces').set(auth(me)).expect(200)).body
