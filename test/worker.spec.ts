@@ -60,7 +60,7 @@ describe('PC worker against the real server', () => {
   afterEach(async () => {
     await worker.stop()
     await t.close()
-    for (const key of ['FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_ARGS_LOG', 'FAKE_WHISPER_LOG']) delete process.env[key]
+    for (const key of ['FAKE_CLAUDE_MODE', 'FAKE_CLAUDE_ARGS_LOG', 'FAKE_WHISPER_LOG', 'FAKE_FFMPEG_LOG']) delete process.env[key]
   })
 
   async function waitFor (fn: () => Promise<boolean> | boolean, timeoutMs = 10_000): Promise<void> {
@@ -85,6 +85,8 @@ describe('PC worker against the real server', () => {
       job = (await t.http().get(`/api/media-summaries/${jobId}`).set(auth()).expect(200)).body
       return ['done', 'failed', 'canceled'].includes(job.status)
     })
+    // the job row is final before the card text is; let that land too
+    await t.app.get(MediaService).idle()
     return job
   }
 
@@ -119,6 +121,29 @@ describe('PC worker against the real server', () => {
 
     expect(jobDirs()).toEqual([])
     expect(fs.readdirSync(t.app.get(MediaService)['config'].media.tmpDir)).toEqual([])
+  })
+
+  it('cuts a prepared file at its own offset and reports times in the original', async () => {
+    await start()
+    const ffmpegLog = path.join(tmp, 'ffmpeg.log')
+    process.env.FAKE_FFMPEG_LOG = ffmpegLog
+    // the browser uploaded only 20:00–25:00, as a 300 s audio file
+    const jobId = (await upload(Buffer.from('DURATION=300.0 prepared audio'), { startMs: 1_200_000, endMs: 1_500_000, fileOffsetMs: 1_200_000 }).expect(202)).body.jobId
+    const job = await finished(jobId)
+    expect(job.status).toBe('done')
+    expect(fs.readFileSync(ffmpegLog, 'utf8')).toMatch(/-ss 0\.000 -i \S+ -t 300\.000 /)
+    expect(await card()).toContain('🎧 talk.mp4 · 20:00–25:00 (5 min)')
+    const transcript = (await t.http().get(`/api/space/${job.transcriptSpaceId}`).set(auth()).expect(200)).body
+    expect(transcript.cards.some((c: Json) => c.name.startsWith('**20:00–20:04 · Part 1**'))).toBe(true)
+  })
+
+  it('without fileOffsetMs, cuts from the selected start as before', async () => {
+    await start()
+    const ffmpegLog = path.join(tmp, 'ffmpeg.log')
+    process.env.FAKE_FFMPEG_LOG = ffmpegLog
+    const job = await finished((await upload().expect(202)).body.jobId)
+    expect(job.status).toBe('done')
+    expect(fs.readFileSync(ffmpegLog, 'utf8')).toMatch(/-ss 60\.000 -i \S+ -t 540\.000 /)
   })
 
   it('retries the summary once with the problems listed', async () => {

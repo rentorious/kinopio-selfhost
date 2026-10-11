@@ -17,9 +17,12 @@ export const MAX_SECTIONS = 300
 
 export type WorkerStage = 'transcribing' | 'summarizing'
 
+/** Worker features announced in hello. 'fileOffset': understands JobOffer.fileOffsetMs. */
+export const FEATURE_FILE_OFFSET = 'fileOffset'
+
 /** worker → server */
 export type WorkerMessage =
-  | { type: 'hello', version: string, model: string, gpu: string, activeJobId?: string }
+  | { type: 'hello', version: string, model: string, gpu: string, activeJobId?: string, features?: string[] }
   | { type: 'downloaded', jobId: string }
   | { type: 'progress', jobId: string, stage: WorkerStage, percent?: number }
   | { type: 'failed', jobId: string, reason: string }
@@ -37,6 +40,12 @@ export interface JobOffer {
   /** The part of the file to transcribe, in ms from its start. */
   startMs: number
   endMs: number
+  /**
+   * Where the downloaded file's 0 sits in the original, in ms. Non-zero when
+   * the browser uploaded only the selected part (docs/AUDIO-PREP.md). Only
+   * sent to workers that announce the 'fileOffset' feature.
+   */
+  fileOffsetMs: number
   /** ISO 639-1 code, or 'auto'. */
   language: string
   /** Optional hint for the summary step: names, jargon, the subject. */

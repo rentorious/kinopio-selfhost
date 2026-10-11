@@ -25,6 +25,7 @@ export interface WorkerInfo {
   version: string
   model: string
   gpu: string
+  features: string[]
 }
 
 /**
@@ -62,9 +63,13 @@ export class WorkerHub extends EventEmitter implements OnModuleDestroy {
     this.wss.close()
   }
 
-  /** Connected. A worker that stops answering pings is dropped within two ping intervals. */
+  /**
+   * Connected and said hello. Until the hello arrives the server can't tell a
+   * reconnect that kept its job from one that lost it, so no job is offered.
+   * A worker that stops answering pings is dropped within two ping intervals.
+   */
   get online (): boolean {
-    return !!this.socket && this.socket.readyState === WebSocket.OPEN
+    return !!this.socket && this.socket.readyState === WebSocket.OPEN && !!this.info
   }
 
   get lastSeenAt (): Date | undefined { return this.seenAt }
@@ -84,6 +89,7 @@ export class WorkerHub extends EventEmitter implements OnModuleDestroy {
       old.terminate()
     }
     this.socket = socket
+    this.info = undefined
     this.alive = true
     this.seenAt = new Date()
     socket.on('pong', () => { this.alive = true; this.seenAt = new Date() })
@@ -93,7 +99,8 @@ export class WorkerHub extends EventEmitter implements OnModuleDestroy {
       try { msg = JSON.parse(raw.toString()) } catch { return }
       if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return
       if (msg.type === 'hello') {
-        this.info = { version: String(msg.version ?? ''), model: String(msg.model ?? ''), gpu: String(msg.gpu ?? '') }
+        const features = Array.isArray(msg.features) ? msg.features.filter((f): f is string => typeof f === 'string').slice(0, 20) : []
+        this.info = { version: String(msg.version ?? ''), model: String(msg.model ?? ''), gpu: String(msg.gpu ?? ''), features }
         this.log.log(`worker connected: ${this.info.model} on ${this.info.gpu} (v${this.info.version})`)
       }
       this.emit('message', msg)
