@@ -31,6 +31,11 @@ Migrations run automatically on every boot.
 | `BUCKET_FORCE_PATH_STYLE` | `false` | Set `true` if the bucket's Credentials tab says to use path-style URLs (older buckets). |
 | `URL_PREVIEW_TIMEOUT_MS` | `5000` | Link preview fetch timeout. |
 | `URL_PREVIEW_ALLOW_HOSTS` | — | Comma-separated hosts that link previews may fetch even though they resolve to private addresses. Leave empty. |
+| `WORKER_TOKEN` | — | Turns on media summaries (§6). The same value goes in the worker's settings on your PC. |
+| `MEDIA_TMP_DIR` | `<os tmpdir>/media-jobs` | Where a dropped media file waits until the worker has downloaded it. The container's disk is right: nothing here should survive a deploy. |
+| `MEDIA_MAX_BYTES` | `314572800` (300 MB) | Largest media file for a summary. |
+| `MEDIA_MAX_MINUTES` | `180` | Longest selected range. |
+| `MEDIA_TMP_MAX_AGE` | `3600000` (1 h) | Media files older than this are swept from `MEDIA_TMP_DIR`. |
 
 ## 4. Your account
 
@@ -49,6 +54,16 @@ Uploads (images, PDFs, audio and video dropped on a space) live in a Railway Sto
 3. Check the bucket's **Credentials** tab: if it says to use path-style URLs, also set `BUCKET_FORCE_PATH_STYLE=true`.
 
 The bucket stays private. Files are streamed to the browser through `GET /files/*`, which counts as service egress (bucket egress itself is free). Railway buckets don't support lifecycle rules, which nothing here needs.
+
+## 6. Media summaries
+
+Dropping audio or video on a space can turn it into a summary card plus a transcript space (MEDIA-SUMMARIES.md). The work runs on your own PC, which connects out to this service, so there's nothing to open on your network.
+
+1. Generate a token (`openssl rand -base64 32`) and set it on the app service as `WORKER_TOKEN`.
+2. Install the worker on the PC: [worker/README.md](../worker/README.md). It uses the same token and your Railway URL.
+3. Check: `GET /api/media-summaries/status` (signed in) reports `"online": true`, and the dialog that opens when you drop a clip says **Transcriber online**.
+
+Without `WORKER_TOKEN` the feature is off: the dialog says the transcriber is offline and **Upload as file** works as before. Media files never go to the bucket or the database.
 
 ## Backups
 
