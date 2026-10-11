@@ -4,3 +4,4 @@ client-dist
 client/.kinopio-client
 .git
 *.log
+data

@@ -7,6 +7,7 @@ The relay never interprets edits. Persistence happens through `POST /operations`
 ## Connection
 
 - URL: the API host with `wss://`, root path (`consts.websocketHost()`). Serve it on the same origin/port as the REST API.
+- Our server routes upgrades by path (`src/realtime/upgrades.ts`): `/api/ws` is the relay; any other path gets a 404.
 - The client gives up a connection attempt after 10 s and reconnects on any close code except 1000.
 - The client sends no heartbeat. Send pings from the server (e.g. every 30 s) so proxies don't drop idle sockets.
 
@@ -33,12 +34,14 @@ Every client message:
 - Allow the join if the space is `open`/`closed` (public), or the `apiKey` user is a member, or `collaboratorKey` or `readOnlyKey` matches the space. If the space exists and none of those hold, send `joinSpaceRoomError`.
 - **If the space doesn't exist yet, leave the socket unjoined and send nothing.** On a brand-new space the client joins before its debounced `createSpace` op reaches the server, then re-sends the join once it has. `joinSpaceRoomError` would put up a sticky error banner that the later successful join doesn't clear.
 - **Bind identity and room to the socket at join time.** Later messages carry no credentials. Drop any later message whose `spaceId` isn't the socket's room.
-- Mark sockets that joined with only a `readOnlyKey` (or as non-members of a non-open space) as read-only and drop their state-changing actions.
+- Mark sockets that joined with only a `readOnlyKey` (or as non-members of a non-open space) as read-only and drop their state-changing actions: every store-qualified action, plus the `globalStore` drawing triggers (`triggerAddDrawingStroke`, `triggerRemoveDrawingStroke`, `triggerUpdateDrawingDataUrl`, `triggerUpdateRemoteDrawingStrokes`). Presence (cursors, selections, dragging) still goes through.
 - A client changing spaces sends `userLeftRoom` and then a new `joinSpaceRoom` on the same socket. It may also re-send `joinSpaceRoom` for the same space right after creating it on the server.
 
 On a successful join, send `userJoinedRoom` (with the joiner's `user`) to everyone else in the room. On socket close, send `userLeftRoom` with `user: {id}` to the room.
 
 ## Server → client messages
+
+The server also sends its own action messages to a room (`Relay.broadcast` in `src/realtime/relay.ts`, used by M2b to update a card live). They follow the same envelope, without `clientId`.
 
 Every message must have a `message` object (the client destructures it unguarded). Omit `clientId` on server-originated messages. If you include `spaceId`, it must equal the receiver's current space or the message is dropped.
 
