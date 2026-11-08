@@ -8,6 +8,7 @@ import { loadConfig, WorkerConfig } from '../worker/src/config'
 import { Worker } from '../worker/src/connection'
 import { claudeArgs, fallbackResult, readOutput } from '../worker/src/summarize'
 import { hasRepetitionLoop } from '../worker/src/whisper'
+import { WebSocketServer } from 'ws'
 import { op, setup, TestContext } from './helpers'
 
 type Json = Record<string, any> // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -203,6 +204,27 @@ describe('PC worker against the real server', () => {
 })
 
 describe('worker pieces', () => {
+  it('reconnects when the server goes silent without closing the socket', async () => {
+    // A server that accepts the worker, then neither pings nor closes: what the
+    // worker sees when a proxy keeps its side of a dropped connection open.
+    const wss = new WebSocketServer({ port: 0 })
+    let connections = 0
+    const second = new Promise<void>(resolve => wss.on('connection', () => { if (++connections === 2) resolve() }))
+    const port = (wss.address() as AddressInfo).port
+    const config = loadConfig({ SERVER_URL: `http://127.0.0.1:${port}`, WORKER_TOKEN: 't', WHISPER_MODEL: '/m' })
+    const logs: string[] = []
+    const silent = new Worker(config, msg => logs.push(msg), 300)
+    silent.start()
+    try {
+      await second
+      expect(logs.join('\n')).toMatch(/no word from the server for 0 s; reconnecting/)
+    } finally {
+      await silent.stop()
+      for (const c of wss.clients) c.terminate()
+      await new Promise(resolve => wss.close(resolve))
+    }
+  })
+
   it('reads the session output folder, front matter and all', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinopio-out-'))
     fs.mkdirSync(path.join(dir, 'output', 'transcript'), { recursive: true })
